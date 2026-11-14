@@ -1,7 +1,7 @@
-.PHONY: setup test test-slow lint run bench bench-spike plots calibrate eval
+.PHONY: setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
-	uv sync --all-groups
+	uv sync --all-groups --all-extras
 
 test:
 	uv run pytest -m "not slow" -q
@@ -12,8 +12,15 @@ test-slow:
 lint:
 	uv run ruff check src tests bench
 
+# CPU-friendly offline demo; override e.g. `make run RUN_ARGS='--grid 64 --offline --seconds 10 --ignite ...'`
+RUN_ARGS ?= --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"
+
 run:
-	uv run python -m livefire.app run --scene table_v1 --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06" --out out/demo
+	uv run python -m livefire.app run --scene table_v1 --out out/demo $(RUN_ARGS)
+
+# Real-time run (default grid from configs/grid.yaml), 20 wall seconds: for the GPU machine
+run-rt:
+	uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"
 
 bench:
 	uv run python bench/run_bench.py

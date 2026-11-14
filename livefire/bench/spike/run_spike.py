@@ -89,7 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     cold_dir = tempfile.mkdtemp(prefix="warp_cold_cache_")
 
     for fw in args.frameworks.split(","):
-        tag, mk_adv, mk_con, cache_note, peak_mb, cold_kernels = _backend(fw, device, cold_dir)
+        try:
+            tag, mk_adv, mk_con, cache_note, peak_mb, cold_kernels = _backend(fw, device, cold_dir)
+        except ImportError as e:
+            print(f"SKIPPING framework {fw!r}: cannot import it ({e}). For taichi run `uv sync --all-groups "
+                  "--all-extras`.", flush=True)
+            continue
         cases = [("advect", g) for g in ADVECT_G] + [("conduction", n) for n in CONDUCTION_N]
         for kernel, size in cases:
             if kernel == "advect":
@@ -125,7 +130,11 @@ def main(argv: list[str] | None = None) -> int:
                 p95_ms=round(t["p95_ms"], 4), p99_ms=round(t["p99_ms"], 4),
                 peak_vram_alloc_mb="" if vram is None else round(vram, 1), notes="; ".join(notes),
             ))  # fmt: skip
+            common.write_rows(out, rows)  # incremental: results survive a crash in a later framework/case
             print(rows[-1]["framework"], kernel, size, f"{t['median_ms']:.3f} ms", flush=True)
+    if not rows:
+        print("no framework could be benchmarked; nothing written")
+        return 1
     common.write_rows(out, rows)
     print("wrote", out)
     return 0

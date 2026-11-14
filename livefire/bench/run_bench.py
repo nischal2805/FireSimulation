@@ -57,6 +57,8 @@ class Bench:
             f"repeat_medians_ms=[{t['rep_median_min']:.3f},{t['rep_median_max']:.3f}]",
             *([fields.pop("notes")] if "notes" in fields else []),
             self.env_note,
+            *([] if self.device == "cpu" else
+              ["peak_vram_alloc_mb = Warp mempool high-water (process-cumulative; reserved not available)"]),
         ]
         row = self.rec.add_timing(
             stage, t, warmup=self.warmup, variant=variant, scene=self.cfg["scene"], mode="offline",
@@ -127,10 +129,10 @@ class Bench:
         base = {"grid_g": g, "surface_elements": sim.surface.n, "resolution": res}
         st = f"renders the evolved {self.state_note}"
         for vs in self.cfg["render_volume_scales"]:
-            comp = Compositor(snap, volume_scale=float(vs))
+            comp = Compositor(snap, volume_scale=float(vs), device=self.device)
             t = self._time(lambda c=comp: c.render(cids[0], frames[cids[0]], sim), spr)
             self._row("render_view", f"volume_scale={vs}", t, spr, views=1, notes=st, **base)
-        comp = Compositor(snap)
+        comp = Compositor(snap, device=self.device)
         vs = comp.scale
         spr = int(self.cfg["frame_two_views_samples_per_repeat"])
         wall_dt = float(self.cfg["frame_wall_dt"])

@@ -11,7 +11,7 @@ Repository: https://github.com/nischal2805/FireSimulation (this project lives in
 Requires Python 3.11 exactly and [uv](https://docs.astral.sh/uv/). The environment is locked by `uv.lock`.
 
 ```
-make setup   # uv sync --all-groups (creates .venv, Python 3.11)
+make setup   # uv sync --all-groups --all-extras (creates .venv, Python 3.11; --all-extras keeps taichi for the spike)
 ```
 
 Run tools through `uv run` (the make targets do this for you).
@@ -23,11 +23,32 @@ Run tools through `uv run` (the make targets do this for you).
 | `make test` | fast tests (`pytest -m "not slow"`) |
 | `make test-slow` | all tests, including the long-run and resolution tests |
 | `make lint` | `ruff check src tests bench` |
-| `make run` | offline demo on the synthetic `table_v1` scene (writes to `out/demo`) |
+| `make run` | offline CPU-friendly demo on the synthetic `table_v1` scene (writes to `out/demo`); change with `RUN_ARGS=...` (default `--grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"`) |
+| `make run-rt` | real-time run, default grid from `configs/grid.yaml`, 20 s wall, same ignition (writes to `out/demo_rt`) |
 | `make bench` | benchmark harness, writes CSVs to `bench/results/` |
 | `make bench-spike` | framework spike kernels benchmark |
 | `make plots` | plots generated from the CSVs in `bench/results/` |
 | `make calibrate`, `make eval` | placeholders, not implemented until P1 |
+
+## Windows (no make)
+
+`make` is optional; on Windows 11 run the commands directly from the project root (PowerShell or cmd). No Python code
+path shells out to bash; paths use `pathlib`.
+
+| Make target | Equivalent |
+| --- | --- |
+| `make setup` | `uv sync --all-groups --all-extras` |
+| `make test` | `uv run pytest -m "not slow" -q` |
+| `make test-slow` | `uv run pytest -q` |
+| `make lint` | `uv run ruff check src tests bench` |
+| `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
+| `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
+| `make bench` | `uv run python bench/run_bench.py` |
+| `make bench-spike` | `uv run python bench/spike/run_spike.py` |
+| `make plots` | `uv run python bench/plots.py` |
+
+Replay a recorded run: `uv run python -m livefire.app replay out/demo` (on a GPU device the final state is compared
+with a tolerance, see ADR-0002).
 
 ## CPU-only note
 

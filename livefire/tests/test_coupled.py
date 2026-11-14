@@ -221,3 +221,21 @@ def test_resolution_sensitivity_cloth_response_g32_vs_g64(table):
     for key in ("ignition", "heat_10K"):
         assert r[32][key] is not None and r[64][key] is not None, f"{key} not reached: {r}"
         assert abs(r[32][key] - r[64][key]) <= 0.25 * r[64][key]
+
+
+def test_step_equals_manual_stages(snap, table):
+    """step() runs the public stages() callables in order, so manual stage calls give an identical state digest."""
+    a, b = make(snap, table), make(snap, table)
+    for s in (a, b):
+        s.ignite(paper_top(snap), 0.06)
+    a.step(6)
+    stages = b.stages(b.dt_sim)
+    assert list(stages) == ["sample_gas", "surface", "gas"]
+    for _ in range(6):
+        for fn in stages.values():
+            fn()
+    sa, sb = a.state_host(), b.state_host()
+    assert sa.step == 6 and sb.step == 0  # only step() advances the counter
+    sb.step, sb.t_sim = sa.step, sa.t_sim
+    assert sa.digest() == sb.digest()
+    assert float(sa.T_g.max()) > float(sa.T_g.min())  # the fire actually did something

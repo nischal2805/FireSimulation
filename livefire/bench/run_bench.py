@@ -45,6 +45,8 @@ class Bench:
         if self.repeats < 5 and not quick:
             raise SystemExit("PRD 11.4: at least 5 repeats")
         cores = f"CPU only, cores={os.cpu_count()}" if device == "cpu" else f"clocks: {rec.clocks}"
+        self.calls: dict[str, int] = {}
+        self.state_note = ""
         self.env_note = cores + ("; quick CI-size run, not a baseline" if quick else "")
 
     def _row(self, stage: str, variant: str, t: dict[str, float], spr: int, **fields: Any) -> dict[str, Any]:
@@ -83,17 +85,34 @@ class Bench:
         spr = int(self.cfg["sim_samples_per_repeat"][g])
         dt, surf, gas = sim.dt_sim, sim.surface, sim.gas
         n_iters = int(sim.params["n_iters"])
-        burning = int(sim.surface.to_host()["burning"].sum())
-        common = {
-            "grid_g": g, "surface_elements": surf.n,
-            "notes": f"pre-roll {self.cfg['preroll_steps']} steps then {burning} elements burning; state keeps evolving",
-        }  # fmt: skip
-        self._row("sim_step", "coupled_1step", self._time(lambda: sim.step(1), spr), spr, **common)
-        pts, t_samp = sim._pts, sim._t_samp  # bench drives the stages that step() composes
-        heat_w, soot, power = surf.heat_W, surf.soot_kg_s, surf.released_power_W
-        self._row("surface_step", "thermal+combustion", self._time(lambda: surf.step(dt, t_samp), spr), spr, **common)
-        self._row("gas_step", "full_with_sources", self._time(lambda: gas.step(dt, pts, heat_w, soot, power), spr), spr, **common)
-        self._row("projection", f"rbgs_iters={n_iters}", self._time(lambda: gas._project(dt, n_iters), spr), spr, **common)
+        stages = sim.stages(dt)
+        pre = f"pre-roll {self.cfg['preroll_steps']} steps"
+        back = "component rows run back-to-back on the evolving state (sim_step first, then the components)"
+        self.calls = {"surface": 0, "gas": 0}
+
+        def counted(name: str) -> Any:
+            def run() -> None:
+                self.calls[name] += 1
+                stages[name]()
+
+            return run
+
+        def row(stage: str, variant: str, run: Any) -> None:
+            t = self._time(run, spr)
+            burning = int(surf.to_host()["burning"].sum())  # state at the end of this stage's timing
+            self._row(stage, variant, t, spr, grid_g=g, surface_elements=surf.n,
+                      notes=f"{pre}; {burning} elements burning after this stage; {back}")  # fmt: skip
+
+        row("sim_step", "coupled_1step", lambda: sim.step(1))
+        row("sample_gas_step", "sample_T_at_elements", stages["sample_gas"])
+        row("surface_step", "thermal+combustion", counted("surface"))
+        row("gas_step", "full_with_sources", counted("gas"))
+        row("projection", f"rbgs_iters={n_iters}", lambda: gas.project(dt, n_iters))
+        self.state_note = (
+            f"state: G={g}, {pre}, sim_step_count={sim.step_count} (pre-roll + sim_step warmup/samples), then "
+            f"{self.calls['surface']} surface-only and {self.calls['gas']} gas-only component calls "
+            f"(they do not advance step_count), {int(surf.to_host()['burning'].sum())} elements burning"
+        )  # fmt: skip
 
     def render_stages(self, g: int, sim: FireSimulation, snap: Any) -> None:
         scene, cams = build_table_v1(), load_cameras()
@@ -106,10 +125,11 @@ class Bench:
         res = f"{cam.width}x{cam.height}"
         spr = int(self.cfg["render_samples_per_repeat"])
         base = {"grid_g": g, "surface_elements": sim.surface.n, "resolution": res}
+        st = f"renders the evolved {self.state_note}"
         for vs in self.cfg["render_volume_scales"]:
             comp = Compositor(snap, volume_scale=float(vs))
             t = self._time(lambda c=comp: c.render(cids[0], frames[cids[0]], sim), spr)
-            self._row("render_view", f"volume_scale={vs}", t, spr, views=1, **base)
+            self._row("render_view", f"volume_scale={vs}", t, spr, views=1, notes=st, **base)
         comp = Compositor(snap)
         vs = comp.scale
         spr = int(self.cfg["frame_two_views_samples_per_repeat"])
@@ -127,7 +147,7 @@ class Bench:
             delivered_fps=round(1000.0 / t["median_ms"], 4),
             rt_factor=round(n * sim.dt_sim / (t["median_ms"] / 1e3), 4),
             notes=f"{n} sim steps per frame (wall_dt={wall_dt:.4f} s); delivered_fps and rt_factor from the median; "
-                  f"no HUD or video write", **base,
+                  f"no HUD or video write; {st}; run_frame advances the sim during timing", **base,
         )  # fmt: skip
 
     def run(self) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -110,17 +111,37 @@ class FireSimulation:
             raise ValueError("ignite needs a finite (3,) point and radius > 0")
         return self.surface.ignite(p, float(radius_m))
 
+    def stages(self, dt: float) -> dict[str, Callable[[], None]]:
+        """Ordered per-stage callables of one coupled step of ``dt`` [s]: ``sample_gas`` (gas T at the element
+        sample points), ``surface`` (thermal + combustion, keeps the sources), ``gas`` (inject sources + gas step).
+        Calling them in order is exactly one :meth:`step` iteration (``step`` runs these same callables) except for
+        the step counter, which only ``step`` advances. No device sync inside; the caller syncs."""
+        s, g = self.surface, self.gas
+        src: list[wp.array] = []
+
+        def sample_gas() -> None:
+            g.sample_T(self._pts, self._t_samp)
+
+        def surface() -> None:
+            src[:] = s.step(dt, self._t_samp)
+
+        def gas() -> None:
+            if not src:
+                raise RuntimeError("stage 'gas' needs a preceding 'surface' stage")
+            g.step(dt, self._pts, src[0], src[1], s.released_power_W)
+
+        return {"sample_gas": sample_gas, "surface": surface, "gas": gas}
+
     def step(self, n_steps: int) -> None:
         """Advance exactly ``n_steps`` of ``dt_sim``; returns when the device work is complete."""
         self._check()
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
         t0 = time.perf_counter_ns()
-        dt, s, g = self.dt_sim, self.surface, self.gas
+        stages = list(self.stages(self.dt_sim).values())
         for _ in range(n_steps):
-            g.sample_T(self._pts, self._t_samp)
-            heat_w, soot_kg_s = s.step(dt, self._t_samp)
-            g.step(dt, self._pts, heat_w, soot_kg_s, s.released_power_W)
+            for stage in stages:
+                stage()
             self._step_count += 1
         wp.synchronize_device(self.device)
         if n_steps:

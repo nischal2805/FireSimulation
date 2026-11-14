@@ -6,6 +6,8 @@ ignite: {point: [-0.075, 0.0, 0.1], radius: 0.06}
 preroll_steps: 120          # sim steps after ignition so that fire exists before anything is timed
 warmup: 2                   # launches discarded per workload (the first includes JIT/compile)
 repeats: 5                  # >= 5 (PRD 11.4)
+# Note: with n = repeats * samples_per_repeat = 15 (G=128, render rows) p99 is effectively the maximum sample;
+# n = 20 and 30 (G=96, G=64) give p99 within the top one or two samples. Read p95/median for trends.
 # Gas grid sizes G for the simulation stages (sim_step coupled, surface_step, gas_step, projection).
 sim_grids: [64, 96, 128]
 # Timed samples per repeat for the sim stages, per G (total samples = repeats * value). CPU Warp is single

@@ -23,4 +23,4 @@ exposure:       {value: 1.0,   unit: "-",      range: [0.1, 10.0],     status: a
 # Flame appearance from the combustion-intensity field (P0-008b, ADR-0004):
 # T_vis = max(T_g, T_amb + dT_flame * (1 - exp(-flame / flame_ref))) drives emission colour and intensity.
 dT_flame:       {value: 1100,  unit: "K",      range: [0, 2500],       status: artistic}
-flame_ref:      {value: 1.0e6, unit: "W/m^3",  range: [1.0e3, 1.0e9],  status: artistic}
+flame_ref:      {value: 3.0e4, unit: "W/m^3",  range: [1.0e3, 1.0e9],  status: artistic}

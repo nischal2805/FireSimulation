@@ -111,23 +111,19 @@ def _luma_near(L, uv, r=20):
 def test_flame_drives_visible_emission(snap, table, record_property):
     sim = make(snap, table)
     pt = paper_top(snap)
-    # the whole paper sheet (radius 0.2 m): at G=32 a small patch gives flame < 0.1 flame_ref (see ADR-0004)
-    assert sim.ignite(pt, 0.2) > 0
+    assert sim.ignite(pt, 0.03) > 0  # default ignition radius
     sim.step(60)  # 1 s after ignition
     assert sim.state_host().T_g.max() < load_params("render")["T_emit_min"]  # T_g alone is below emission
-    # Soot absorption/in-scatter switched off in both so that only emission is measured. flame_ref is lowered to
-    # 1e5 W/m^3 for this G=32 test: with the default 1e6 the coarse-grid flame (<= 5e5 W/m^3) stays below the 700 K
-    # emission threshold (total luminance ~6e-4, reported in ADR-0004).
-    base = {"k_abs": 0.0, "soot_albedo": 0.0, "flame_ref": 1.0e5}
-    on = Compositor(snap, params=_override("render", **base), volume_scale=0.5)
-    off = Compositor(snap, params=_override("render", dT_flame=0.0, **base), volume_scale=0.5)
+    on = Compositor(snap, volume_scale=0.5)  # shipped render defaults
+    off = Compositor(snap, params=_override("render", dT_flame=0.0), volume_scale=0.5)
     for cid, calib in snap.cameras.items():
         uv = project(calib, pt[None])[0][0]
         s_on = _luma_near(on.render_volume(cid, sim)[1], uv)
         s_off = _luma_near(off.render_volume(cid, sim)[1], uv)
         record_property(f"emission_cam{cid}", f"with={s_on:.4g} without={s_off:.4g}")
         assert s_on > 0.0
-        assert s_off <= 1e-3 * s_on
+        # without dT_flame only the soot in-scatter term remains (not emission): well below the flame emission
+        assert s_off <= 0.05 * s_on
 
 
 def test_flame_in_state_digest(snap, table):

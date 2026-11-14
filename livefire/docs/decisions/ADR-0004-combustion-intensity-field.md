@@ -27,12 +27,14 @@ Command: `uv run pytest tests/test_flame_field.py`.
 
 ## Results (table, CSV links)
 
-G=32, 1 s after ignition: lit patch r = 0.03 m, `flame` peak 3.7e4 W/m^3 (13 elements); whole paper sheet
-(r = 0.2 m), peak 4.9e5 W/m^3. G=64, r = 0.03 m: peak 2.1e5 W/m^3 (`T_g` peak 329 K). With the default
-`flame_ref = 1e6` W/m^3 these give `T_vis` below 700 K (emission luminance within 20 px of the ignition point is
-0.0 for both views on the whole sheet at G=32), so the visual flame is not yet visible at the default
-`flame_ref`; with `flame_ref = 1e5` the same state gives 157 / 703 (cam0 / cam1) and 0 / 0 with `dT_flame = 0`.
-`flame_ref` is an artistic, resolution-dependent parameter and needs tuning at the target grid (tuning is open).
+Measured 1 s after ignition: G=32, r = 0.03 m patch (13 elements): `flame` peak 3.7e4 W/m^3 (`T_g` peak 304 K);
+G=32 whole paper sheet (r = 0.2 m): 4.9e5 W/m^3; G=64, r = 0.03 m: 2.1e5 W/m^3 (`T_g` peak 329 K). The first value
+chosen for `flame_ref` (1e6 W/m^3, an estimate) was about 30x too high: the emission threshold of 700 K needs
+`flame > 4.6e5` there, so no flame was visible at G=32 even for the whole sheet. Ruling: `flame_ref = 3e4 W/m^3`
+(artistic), which gives `T_vis` of about 1070 K for the G=32 small patch and saturated flames at G=64.
+Rendered with the shipped defaults (G=32, r = 0.03 m), luminance within 20 px of the projected ignition point
+(cam0 / cam1): 8.7 / 79.9 with `dT_flame = 1100`, 0.12 / 0.22 with `dT_flame = 0` (the remainder is soot in-scatter,
+not emission). `flame_ref` is resolution dependent and needs re-tuning when `G` changes.
 
 ## Scores (11.6)
 
@@ -49,7 +51,7 @@ Not scored (artistic appearance parameter).
 - It is a passive scalar for the renderer and does not feed back into heat transfer; flame spread stays with the
   radiation options of P2.
 - Renderer: `T_vis = max(T_g, T_amb + dT_flame (1 - exp(-flame / flame_ref)))` (`dT_flame = 1100 K`, `flame_ref =
-  1e6 W/m^3`, artistic) drives emission colour and intensity; soot absorption is unchanged; world space only; the
+  3e4 W/m^3`, artistic) drives emission colour and intensity; soot absorption is unchanged; world space only; the
   renderer never writes sim state. The active box includes cells with `flame > 0.01 flame_ref`.
 - Fallback: tune `flame_ref`/`dT_flame`; P4 replaces this with an appearance model.
 
@@ -58,4 +60,3 @@ Not scored (artistic appearance parameter).
 - `flame` per cell depends on the grid resolution (the same power is spread over `h^3`), so `flame_ref` must be
   re-tuned when `G` changes.
 - `FireStateView` and `FireStateHost` (and its digest) gain `flame`.
-- The default `flame_ref` is too high for small patches at G=32/64 (see Results).

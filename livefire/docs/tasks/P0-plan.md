@@ -9,7 +9,7 @@ resolutions 1-11 listed in "Approved rulings" below.
   Package `src/livefire/`, tests `tests/`, configs `configs/`, bench `bench/`, eval `eval/`, `data/` gitignored.
 - Python **3.11 exactly** (`requires-python = "==3.11.*"`), env managed with `uv` (`uv.lock` committed). Run tools via
   `uv run ...` from the project root. `make test` = `uv run pytest -m "not slow" -q`; `make test-slow` = all tests.
-- No hand-written CUDA C++. GPU kernels in the framework chosen by ADR-0001 (written into Task 5+ once decided).
+- No hand-written CUDA C++. GPU kernels in NVIDIA Warp (ADR-0001: Warp primary, Taichi fallback; status proposed pending the GPU run).
   This container has **no GPU**: kernels must run on the framework's CPU device; device is selected by
   `configs/app.yaml: device` (`"cpu"` here, `"cuda:0"` on the user's machine). Never hard-code `cuda`.
 - Geometry contract (PRD section 4), verbatim: world right-handed, metres, +Z up, origin at board centre on the
@@ -300,7 +300,8 @@ Input: per view `(calib, depth, valid, obj_id, rgb)` plus `obj_id -> material` (
 
 **Files:** `src/livefire/sim/surface.py` (kernels + `SurfaceFireModel`), `src/livefire/sim/device.py` (device
 selection and snapshot upload helpers), `configs/sim.yaml` (surface section), `tests/test_surface_invariants.py`.
-Framework: per ADR-0001 (filled in by the controller before dispatch).
+Framework: **NVIDIA Warp** (`warp-lang`, ADR-0001, status proposed pending the GPU run). Warp's CPU backend is
+single-threaded: keep test grids/element counts small (G <= 32 in unit tests) so `make test` stays fast.
 
 - `SurfaceFireModel(snapshot, materials: MaterialTable, params, device)`: owns device arrays T_s, E, m_fuel, char,
   removed, burning, per-element material id (overridable), precomputed edge conductances `G (N,K)` (controller

@@ -42,3 +42,19 @@ def test_good():
 def test_bad_raises_with_key(bad):
     with pytest.raises(ConfigError, match="a"):
         Params({"a": bad})
+
+
+def test_list_valued_params():
+    p = Params({"c": {**GOOD, "value": [0.5, 1, 2]}})
+    assert p.vec("c") == [0.5, 1.0, 2.0]
+    assert Params({"a": GOOD}).vec("a") == [1.0]  # scalar gives a 1-list
+    with pytest.raises(ConfigError, match="vec"):
+        p["c"]
+    ash = load_params("render").vec("ash_color")
+    assert ash == [0.12, 0.11, 0.10]
+
+
+@pytest.mark.parametrize("value", [[], [0.5, 3.0], [0.5, "x"], [True]])
+def test_bad_list_values(value):
+    with pytest.raises(ConfigError):
+        Params({"c": {**GOOD, "value": value}})

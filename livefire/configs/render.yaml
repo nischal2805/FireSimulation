@@ -2,11 +2,14 @@
 #   name: {value: <v>, unit: "<u>", range: [lo, hi], status: physical_estimate|artistic}
 # List values are allowed; the range applies to every element.
 # Volume renderer and compositor (P0-009, PRD 7.4). All artistic.
+# Unit conventions used by the code: the renderer treats the `soot` field as smoke mass concentration in kg/m^3,
+# so sigma_a = k_abs * soot is an absorption coefficient in 1/m (k_abs in m^2/kg is correct only under that reading).
+# Emission is a radiance per metre of path: L += T_vol * emission_scale * lut(T) * f^p * ds, so emission_scale is in 1/m.
 volume_scale:   {value: 0.5,   unit: "-",      range: [0.25, 1.0],     status: artistic}
 step_factor:    {value: 0.5,   unit: "h_gas",  range: [0.1, 1.0],      status: artistic}
 t_min:          {value: 0.01,  unit: "-",      range: [0.0, 0.2],      status: artistic}
 feather_m:      {value: 0.01,  unit: "m",      range: [0.0, 0.1],      status: artistic}
-emission_scale: {value: 4.0,   unit: "-",      range: [0.0, 50.0],     status: artistic}
+emission_scale: {value: 4.0,   unit: "1/m",     range: [0.0, 50.0],     status: artistic}
 T_emit_min:     {value: 700,   unit: "K",      range: [400, 1200],     status: artistic}
 T_emit_ref:     {value: 1400,  unit: "K",      range: [800, 3000],     status: artistic}
 emission_power: {value: 2.0,   unit: "-",      range: [0.5, 4.0],      status: artistic}

@@ -3,7 +3,9 @@
 Per pixel of a (possibly reduced) view buffer, march a world-space ray through the cell-centred
 fields T_g and soot (shape (G,G,G), index [ix,iy,iz], centre = roi_min + (i+0.5) h), sampled
 trilinearly in world space. Output transmittance T_vol and added radiance L_vol (linear RGB).
-Emission is absorbed by soot along the ray. Read-only on the fields. Device: any Warp device.
+Emission is absorbed by soot along the ray.
+Units: ``soot`` is read as kg/m^3, so ``sigma_a = k_abs * soot`` is 1/m (k_abs in m^2/kg); emission is added as
+``emission_scale [1/m] * lut(T) * f^p * ds`` (radiance per metre of path). Read-only on the fields. Device: any Warp device.
 """
 
 from __future__ import annotations

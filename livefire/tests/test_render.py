@@ -82,7 +82,7 @@ def test_occlusion_behind_block(rig):
     # z~0.008 heading down. Keep the same horizontal position, rest the blob on the table plane.
     assert pt[2] < 0
     pt[2] = 0.0
-    st = blob_state(snap, G, pt[None])
+    st = blob_state(snap, G, pt[None], sigma_cells=1.0)
     _, L0 = comp.render_volume(0, st)
     _, L1 = comp.render_volume(1, st)
     r = 15
@@ -90,26 +90,27 @@ def test_occlusion_behind_block(rig):
     (_, s1) = _centroid(L1, project(c1, pt)[0][0], r)
     print(f"occlusion ratio cam0/cam1 = {s0 / s1:.4f} (cam0 {s0:.3f}, cam1 {s1:.3f}); point {np.round(pt, 3)}")
     assert s1 > 0 and s0 < 0.05 * s1
+    # control: with the occlusion clip disabled the same blob is clearly visible from cam0
+    comp_nc = Compositor(snap, volume_scale=1.0)
+    v0 = comp_nc.views[0]
+    v0.t_far = np.where(v0.t_far > 0, 1e3, 0.0).astype(np.float32)  # ROI/active clip still applies in-kernel
+    _, L0n = comp_nc.render_volume(0, st)
+    (_, s0n) = _centroid(L0n, project(c0, pt)[0][0], r)
+    print(f"control (occlusion clip off): cam0/cam1 = {s0n / s1:.2f}")
+    assert s0n / s1 > 5
 
 
 def test_holes_suppress_emission(rig):
-    snap, _, _, comp = rig
-    pt = np.array([[0.0, 0.0, 0.3]])
-    st = blob_state(snap, G, pt)
-    _, L = comp.render_volume(0, st)
-    assert L.sum() > 0
-    saved = snap.view_hole_mask[0]
-    comp2 = Compositor(snap, volume_scale=1.0)
-    comp2.views[0].t_far[:] = 0.0  # equivalent to an all-hole mask in the static clip
-    _, L2 = comp2.render_volume(0, st)
-    assert L2.sum() == 0
-    # and via the snapshot mask itself (builder path): holes are honoured at construction
     import dataclasses
 
-    holes = {0: np.ones_like(saved), 1: snap.view_hole_mask[1]}
+    snap, _, _, comp = rig
+    st = blob_state(snap, G, np.array([[0.0, 0.0, 0.3]]))
+    _, L = comp.render_volume(0, st)
+    assert L.sum() > 0
+    holes = {0: np.ones_like(snap.view_hole_mask[0]), 1: snap.view_hole_mask[1]}
     snap_h = dataclasses.replace(snap, view_hole_mask=holes)
-    _, L3 = Compositor(snap_h, volume_scale=1.0).render_volume(0, st)
-    assert L3.sum() == 0
+    T3, L3 = Compositor(snap_h, volume_scale=1.0).render_volume(0, st)
+    assert L3.sum() == 0 and T3.min() == 1.0
 
 
 def test_blackbody_lut():
@@ -146,3 +147,18 @@ def test_char_and_errors(rig):
     with pytest.raises(CalibVersionError):
         comp.render(0, Frame(0, frames[0].rgb, 0, 0, 99), st)
     assert n == len(st.char)
+
+
+def test_overlay_paper_solid(rig):
+    """Paper elements at removed=1: no stipple from coplanar table surfels (owner-object rule)."""
+    from scipy.ndimage import binary_erosion
+
+    snap, _, frames, comp = rig
+    removed = (snap.obj_id == 3).astype(np.float32)
+    for cid in (0, 1):
+        r = comp.views[cid].overlay.splat(removed)
+        inner = binary_erosion(frames[cid].obj_id == 3, iterations=4)
+        assert inner.sum() > 500
+        frac = float((r[inner] > 0.9).mean())
+        print(f"cam{cid}: paper interior px {inner.sum()}, removed>0.9: {frac:.4f}")
+        assert frac >= 0.99

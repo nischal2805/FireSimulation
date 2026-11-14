@@ -28,7 +28,7 @@ resolutions 1-11 listed in "Approved rulings" below.
 - Use only accessor helpers from `livefire.common.geometry` for voxel index/centre maths.
 - Each task: first copy your brief verbatim to `docs/tasks/<P0-ID>-<slug>.md`; at the end update
   `docs/STATUS.md` (completed tasks, next task, blockers) and commit with message `P0-00N: <title>` plus trailers:
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and
+  a `Co-Authored-By: Claude <your model name> <noreply@anthropic.com>` trailer and
   `Claude-Session: https://claude.ai/code/session_01FvsiJ1w9gRFcZuiYu1oxY3`. Do not push.
 - `ruff check` clean, type hints on public functions, docstrings on public interfaces stating shapes, units, frame,
   device, ownership.

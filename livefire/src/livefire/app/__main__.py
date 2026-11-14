@@ -33,9 +33,10 @@ def main(argv: list[str] | None = None) -> int:
     i = sub.add_parser("interactive", help="interactive viewer: click to ignite (synthetic scene)")
     i.add_argument("--scene", default="table_v1")
     i.add_argument("--grid", type=int, default=None, help="gas grid G override (default: configs/grid.yaml)")
-    i.add_argument("--out", default=None, help="record the session (events, config, digest) to this directory")
-    i.add_argument("--max-width", type=int, default=1600, help="window width limit in pixels")
-    i.add_argument("--max-height", type=int, default=900, help="window height limit in pixels")
+    i.add_argument("--out", default="out/interactive", help="directory for screenshots (and the record)")
+    i.add_argument("--record", action="store_true", help="record the session (events, config, digest) to --out")
+    i.add_argument("--max-width", type=int, default=None, help="window width limit px (default: screen size)")
+    i.add_argument("--max-height", type=int, default=None, help="window height limit px (default: screen size)")
     i.add_argument("--frames", type=int, default=None, help="exit after N frames (smoke testing)")
     from livefire.app.capture_cli import add_subparsers, run_command
 
@@ -51,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "interactive":
         from livefire.app.window import run_interactive
 
-        return run_interactive(a.scene, a.grid, Path(a.out) if a.out else None, a.max_width, a.max_height, a.frames)
+        return run_interactive(a.scene, a.grid, Path(a.out), a.max_width, a.max_height, a.frames, a.record)
 
     from livefire.app.replay import parse_ignite, parse_override, replay
     from livefire.app.runner import RunConfig, Runner

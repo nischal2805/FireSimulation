@@ -30,6 +30,29 @@ WINDOW = "LiveFire interactive"
 _PALETTE = [(255, 80, 80), (80, 255, 80), (80, 160, 255), (255, 255, 80), (255, 80, 255), (80, 255, 255)]
 
 
+def screen_size() -> tuple[int, int] | None:
+    """Primary screen size in pixels via tkinter, or None when unavailable (headless, no tkinter)."""
+    try:
+        import tkinter
+
+        root = tkinter.Tk()
+        try:
+            root.withdraw()
+            return int(root.winfo_screenwidth()), int(root.winfo_screenheight())
+        finally:
+            root.destroy()
+    except Exception:  # noqa: BLE001 - any failure means "unknown"
+        return None
+
+
+def fit_limits(max_w: int | None, max_h: int | None) -> tuple[int, int]:
+    """Window size limits: explicit values win; otherwise 95 % of the detected screen (minus a margin for the title
+    bar and HUD), falling back to 1600x900."""
+    scr = screen_size() if (max_w is None or max_h is None) else None
+    dw, dh = (int(scr[0] * 0.95), int(scr[1] * 0.85)) if scr else (1600, 900)
+    return (max_w if max_w is not None else dw), (max_h if max_h is not None else dh)
+
+
 class InteractiveSession:
     """Synthetic-scene session: lifecycle, sources, simulation, renderer and the controller. Not thread-safe."""
 
@@ -120,10 +143,12 @@ class InteractiveSession:
         self.controller.finish_reacquire("re-acquire: synthetic scene is static, snapshot unchanged")
 
 
-def run_interactive(scene: str, grid: int | None, out: Path | None, max_w: int = 1600, max_h: int = 900,
-                    frames: int | None = None) -> int:
-    """Open the window and run until ``q``/Esc (or ``frames`` frames). With ``out`` the session is recorded
-    (events, config, digest) so ``replay <out>`` reproduces it."""
+def run_interactive(scene: str, grid: int | None, out: Path, max_w: int | None = None, max_h: int | None = None,
+                    frames: int | None = None, record: bool = False) -> int:
+    """Open the window and run until ``q``/Esc (or ``frames`` frames). Screenshots go to ``out``. With ``record``
+    the session is also recorded to ``out`` (events, config, digest) so ``replay <out>`` reproduces it.
+    ``max_w``/``max_h`` default to the detected screen size (fallback 1600x900)."""
+    max_w, max_h = fit_limits(max_w, max_h)
     sess = InteractiveSession(scene, grid, max_w, max_h)
     ctl = sess.controller
     ctl.start()
@@ -158,7 +183,8 @@ def run_interactive(scene: str, grid: int | None, out: Path | None, max_w: int =
                 ctl.key(chr(code) if code != 27 else "esc")
             if ctl.screenshot_requested:
                 ctl.screenshot_requested = False
-                path = Path(f"screenshot_{int(time.time())}.png")
+                out.mkdir(parents=True, exist_ok=True)
+                path = out / f"screenshot_{int(time.time())}.png"
                 cv2.imwrite(str(path), img[..., ::-1])
                 ctl.message = f"saved {path}"
             if ctl.reacquire_requested:
@@ -174,7 +200,7 @@ def run_interactive(scene: str, grid: int | None, out: Path | None, max_w: int =
         for s in sess.sources:
             s.stop()
         cv2.destroyAllWindows()
-        if out is not None:
+        if record:
             digest = ctl.save_session(out, scene, sess.grid_override, sess.app, status)
             log.info("session recorded to %s (digest %s)", out, digest)
     return 0

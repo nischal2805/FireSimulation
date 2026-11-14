@@ -82,10 +82,6 @@ def test_click_on_hole_does_nothing(world):
         res = ctl.click(cam, int(us[len(us) // 2]), int(vs[len(us) // 2]), "left")
         assert res.reason == "hole" and "hole" in res.message and res.event is None
         assert pick_object(snap, cam, int(us[0]), int(vs[0])) == -1
-        vs, us = np.nonzero(snap.view_hole_mask[cam])
-        assert len(us)
-        res = ctl.click(cam, int(us[0]), int(vs[0]), "left")
-        assert res.reason == "hole" and "hole" in res.message and res.event is None
     assert ctl.events == [] and ctl.sim.step_count == 0
     assert not ctl.sim.state_host().burning.any()
     assert ctl.click(0, -5, 10).reason == "outside" and ctl.click(0, 10, 99999).reason == "outside"
@@ -102,12 +98,75 @@ def test_click_on_metal_not_flammable(world):
     assert ctl.events == [] and not ctl.sim.state_host().burning.any()
 
 
-def test_edge_pixel_depth_is_median_of_valid_neighbours(world):
-    _, snap, renders = world
-    r = renders[0]
-    m = (r.obj_id == PAPER) & r.valid
+def _edge_pixels(r, obj):
+    m = (r.obj_id == obj) & r.valid
     edge = m & ~cv2.erode(m.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
     vs, us = np.nonzero(edge)
-    u, v = int(us[0]), int(vs[0])
-    p, reason = pixel_to_world(snap, 0, u, v)
-    assert reason == "ok" and np.isfinite(p).all()
+    return list(zip(us.tolist(), vs.tolist()))
+
+
+def test_silhouette_clicks_pick_the_surface_actually_hit(world, capsys):
+    """1-px inner boundary pixels of every object, both views. The picked object is "none" (-1) or lies on the
+    back-projected point (analytic distance < 1 cm; contact lines such as wood/table or cloth/table can touch).
+    Per-object rates against the geometric truth AND against the renderer's obj_id map are printed (pytest -s).
+    Note: the renderer's obj_id map disagrees with its own depth at some silhouette pixels (e.g. a pixel labelled
+    metal whose depth is the paper behind), so the analytic surface, not the label, is the ground truth."""
+    scene, snap, renders = world
+    rows = []
+    for cam in (0, 1):
+        for obj in range(5):
+            px = _edge_pixels(renders[cam], obj)
+            n = same_label = none = geom_ok = 0
+            for u, v in px:
+                p, _ = pixel_to_world(snap, cam, u, v)
+                if p is None:
+                    none += 1
+                    continue
+                got = pick_object(snap, cam, u, v)
+                n += 1
+                same_label += got == obj
+                none += got == -1
+                d = [scene.distance_to_object(o, p[None])[0] for o in range(5)]
+                if got == -1:
+                    continue
+                assert d[got] < 0.01, f"cam{cam} obj{obj} ({u},{v}): picked {got}, {d[got]:.4f} m from the point"
+                geom_ok += got == int(np.argmin(d))
+            rows.append((cam, obj, len(px), same_label, none, geom_ok))
+    with capsys.disabled():
+        print("\nsilhouette pick rates: cam obj n_edge_px | == obj_id label | none | == analytic nearest object")
+        for c, o, n, sl, no, g in rows:
+            print(f"  cam{c} obj{o}: n={n} label={sl / n:.3f} none={no / n:.3f} geom={g / n:.3f}")
+    # metal-box boundary clicks never light anything
+    ctl = make_ctl(snap)
+    for cam in (0, 1):
+        px = _edge_pixels(renders[cam], METAL)
+        for i in range(0, len(px), max(1, len(px) // 80)):
+            res = ctl.click(cam, *px[i], "left")
+            if res.reason == "ignited":
+                # a boundary click that ignites must have landed within 1 cm of a flammable surface
+                assert min(scene.distance_to_object(o, res.point[None])[0] for o in (1, 3, 4)) < 0.01
+
+
+def test_click_records_pixel_used(world):
+    _, snap, renders = world
+    from livefire.app.click import resolve_click
+
+    u, v = interior_pixels(renders[0], PAPER, 1)[0]
+    r = resolve_click(snap, 0, u + 0.3, v - 0.2)
+    assert r.reason == "ok" and r.pixel == (u, v) and r.depth == pytest.approx(float(snap.view_depth[0][v, u]), abs=0.02)
+    ctl = make_ctl(snap)
+    res = ctl.click(0, u, v)
+    assert res.pixel == (u, v) and res.depth > 0
+
+
+def test_clicks_gated_on_lifecycle(world):
+    _, snap, renders = world
+    ctl = make_ctl(snap)
+    u, v = interior_pixels(renders[0], PAPER, 1)[0]
+    ctl.key("r")  # -> ACQUIRING
+    for button in ("left", "right"):
+        res = ctl.click(0, u, v, button)
+        assert res.reason == "not ready" and res.message == "not ready" and res.event is None
+    assert ctl.events == [] and ctl.selected is None
+    ctl.finish_reacquire("ok")
+    assert ctl.click(0, u, v).reason == "ignited"

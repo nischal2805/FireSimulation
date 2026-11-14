@@ -53,6 +53,7 @@ def test_right_click_select_then_key_overrides_material(ctl):
     assert any("REQUIRES REVIEW" in ln or "reviewed" in ln for ln in ctl.hud_lines())
     assert "metal" in ctl.hud_lines()[0]
     ctl.key("3")  # wood
+    assert ctl.overrides == {2: "wood"} and int(np.argmax(ctl.snap.objects[2].material.class_probabilities)) == 4  # frozen registry
     ov = ctl.events[-1]
     assert (ov.kind, ov.obj_id, ov.material) == ("override", 2, "wood")
     assert "wood" in ctl.hud_lines()[0] and "reviewed" in ctl.hud_lines()[0]

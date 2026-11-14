@@ -92,8 +92,9 @@ Glass-to-glass latency (PRD 5.5), per camera:
 try it before cameras are calibrated). Mouse: left click ignites at the clicked surface point (holes and
 non-flammable objects only show a message), right click selects an object. Keys: `1`..`8` set the selected object's
 material (paper, cloth, wood, plastic, metal, glass, ceramic, other_nonflammable), `space` pause/resume, `+`/`-`
-ignition radius, `o` geometry overlay, `v` single/dual view, `r` re-acquire request, `s` screenshot, `q` quit. Use
-`--out DIR` to record the session (events.jsonl with every click and override, replayable with `replay DIR`).
+ignition radius, `o` geometry overlay, `v` single/dual view, `r` re-acquire request, `s` screenshot, `q` quit. Screenshots
+go to `--out DIR` (default `out/interactive`); `--record` also records the session there (events.jsonl with every click
+and override, replayable with `replay DIR`). The window is sized to the screen (`--max-width/--max-height` override).
 
 ## CPU-only note
 

@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from livefire.app.click import pick_element_at, pixel_to_world
+from livefire.app.click import pick_element_at, resolve_click
 from livefire.app.lifecycle import Lifecycle, State
 from livefire.app.replay import Event, apply_event, config_snapshot, write_record
 from livefire.common.config import Params
@@ -41,6 +41,8 @@ class ClickResult:
     obj_id: int = -1
     n_lit: int = 0
     event: Event | None = None
+    pixel: tuple[int, int] | None = None  # integer pixel whose depth neighbourhood was used
+    depth: float = 0.0  # Z-depth [m] used for the back-projection
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class InteractiveController:
         self.mat = snapshot.material_id.copy()  # per-element material id, tracks overrides
         self.events: list[Event] = []
         self.selected: int | None = None
+        self.overrides: dict[int, str] = {}  # obj_id -> material name (the frozen snapshot registry is not mutated)
         self.message = "ready: left click ignites, right click selects"
         self.overlay = False
         self.view_mode = 0  # 0 = dual (all cameras), k >= 1 = only camera sorted(cameras)[k - 1]
@@ -134,6 +137,8 @@ class InteractiveController:
         return rec
 
     def _obj_material(self, obj_id: int) -> str:
+        if obj_id in self.overrides:
+            return self.overrides[obj_id]
         return MATERIAL_CLASSES[int(np.argmax(self.snap.objects[obj_id].material.class_probabilities))]
 
     def click(self, cam: int, u: float, v: float, button: str = "left", mods: int = 0) -> ClickResult:
@@ -141,43 +146,50 @@ class InteractiveController:
         P1R5) or ``"right"`` (select the object). ``mods`` (modifier flags) is currently unused."""
         if button not in ("left", "right"):
             raise ValueError(f"unknown button {button!r}")
-        p, reason = pixel_to_world(self.snap, cam, u, v)
+        if self.life.state not in (State.SIMULATING, State.PAUSED):
+            self.message = "not ready"
+            return ClickResult("not ready", self.message)
+        cp = resolve_click(self.snap, cam, u, v)
+        p, reason = cp.point, cp.reason
         if p is None:
             self.message = {"hole": "hole: no surface at this pixel", "outside": "outside: click is outside the view",
                             "no_depth": "no_depth: no valid depth here"}[reason]
-            return ClickResult(reason, self.message)
+            return ClickResult(reason, self.message, pixel=cp.pixel)
         elem, obj = pick_element_at(self.snap, p)
         if button == "right":
             if obj < 0 or obj not in self.snap.objects:
                 self.message = "no object here"
-                return ClickResult("no object", self.message, p)
+                return ClickResult("no object", self.message, p, pixel=cp.pixel, depth=cp.depth)
             self.selected = obj
             self.message = f"selected object {obj} ({self.snap.objects[obj].name})"
-            return ClickResult("selected", self.message, p, obj)
+            return ClickResult("selected", self.message, p, obj, pixel=cp.pixel, depth=cp.depth)
         if elem < 0:  # valid depth but no scene element near it: room wall / background, treated like a hole
             self.message = "hole: no scene surface at this pixel (room / background)"
-            return ClickResult("hole", self.message, p)
+            return ClickResult("hole", self.message, p, pixel=cp.pixel, depth=cp.depth)
         if not self.materials.flammable[int(self.mat[elem])]:
             name = self.materials.names[int(self.mat[elem])]
             self.message = f"not flammable ({name})"
-            return ClickResult("not flammable", self.message, p, obj)
+            return ClickResult("not flammable", self.message, p, obj, pixel=cp.pixel, depth=cp.depth)
         rec = self._record(Event("ignite", self.sim.t_sim, point=tuple(float(x) for x in p), radius=self.radius,
                                  cam=int(cam), u=float(u), v=float(v)))  # fmt: skip
         n = int(rec.n_lit or 0)
         if n == 0:
             self.message = "no fuel: no flammable element within the ignition radius"
-            return ClickResult("no fuel", self.message, p, obj, 0, rec)
+            return ClickResult("no fuel", self.message, p, obj, 0, rec, cp.pixel, cp.depth)
         self.message = f"ignited {n} elements (r = {self.radius * 100:.1f} cm)"
-        return ClickResult("ignited", self.message, p, obj, n, rec)
+        return ClickResult("ignited", self.message, p, obj, n, rec, cp.pixel, cp.depth)
 
     def set_selected_material(self, material_index: int) -> str:
         """Override the selected object's material (index into MATERIAL_CLASSES); recorded as an override event."""
+        if self.life.state not in (State.SIMULATING, State.PAUSED):
+            self.message = "not ready"
+            return self.message
         if self.selected is None:
             self.message = "select an object first (right click)"
             return self.message
         name = MATERIAL_CLASSES[material_index]
         self._record(Event("override", self.sim.t_sim, obj_id=self.selected, material=name))
-        self.snap.objects.override_material(self.selected, name)
+        self.overrides[self.selected] = name
         self.mat[self.snap.obj_id == self.selected] = material_index
         self.message = f"object {self.selected} -> {name}"
         return self.message
@@ -235,7 +247,7 @@ class InteractiveController:
         else:
             o = self.snap.objects[self.selected]
             sel = (f"selected: {self.selected} {o.name}   material {self._obj_material(self.selected)}   "
-                   f"{'REQUIRES REVIEW' if o.material.requires_review else 'reviewed'}")  # fmt: skip
+                   f"{'REQUIRES REVIEW' if o.material.requires_review and self.selected not in self.overrides else 'reviewed'}")  # fmt: skip
         return [sel, f"ignition radius {self.radius * 100:.1f} cm   {self.message}"]
 
     def save_session(self, out: Path, scene: str, grid_override: dict[str, Any] | None, app_cfg: dict[str, Any],

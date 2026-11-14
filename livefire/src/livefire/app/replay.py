@@ -1,0 +1,149 @@
+"""Scripted events, run recording and deterministic replay (PRD 5.5).
+
+A run directory holds ``events.jsonl`` (one event per line, applied at a simulation step index),
+``config_snapshot.yaml`` (every config the run used, incl. the grid override), ``run.json`` (seed, scene,
+final step, final ``FireStateHost.digest()``). Replay re-runs the simulation only and compares digests
+(CPU: exact)."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import yaml
+
+from livefire.common.config import Params, config_dir, load_yaml, load_yaml_text
+from livefire.perception.material.types import MATERIAL_CLASSES
+from livefire.sim.coupled import FireSimulation
+from livefire.sim.materials import MaterialTable
+
+
+@dataclass(frozen=True)
+class Event:
+    """A scripted event. ``t`` is the requested sim time [s]; ``step`` the sim step index at which it was
+    applied (set when recorded; -1 before). ignite: ``point`` world (x,y,z) m, ``radius`` m.
+    override: ``obj_id`` and ``material`` name."""
+
+    kind: str  # "ignite" | "override"
+    t: float
+    step: int = -1
+    point: tuple[float, float, float] | None = None
+    radius: float | None = None
+    obj_id: int | None = None
+    material: str | None = None
+    n_lit: int | None = None  # result, informational
+
+
+def parse_ignite(spec: str) -> Event:
+    """Parse ``"x,y,z@t[:r]"`` (metres, sim seconds, optional radius in metres)."""
+    try:
+        pos, rest = spec.rsplit("@", 1)
+        tpart, _, rpart = rest.partition(":")
+        x, y, z = (float(v) for v in pos.split(","))
+        return Event("ignite", float(tpart), point=(x, y, z), radius=float(rpart) if rpart else None)
+    except ValueError as e:
+        raise ValueError(f"bad --ignite {spec!r}, expected 'x,y,z@t[:r]'") from e
+
+
+def parse_override(spec: str) -> Event:
+    """Parse ``"obj_id=material@t"``; material must be one of MATERIAL_CLASSES."""
+    try:
+        lhs, tpart = spec.rsplit("@", 1)
+        oid, mat = lhs.split("=", 1)
+        ev = Event("override", float(tpart), obj_id=int(oid), material=mat)
+    except ValueError as e:
+        raise ValueError(f"bad --override {spec!r}, expected 'obj_id=material@t'") from e
+    if mat not in MATERIAL_CLASSES:
+        raise ValueError(f"unknown material {mat!r}; one of {list(MATERIAL_CLASSES)}")
+    return ev
+
+
+def apply_event(sim: FireSimulation, ev: Event, default_radius: float) -> Event:
+    """Apply ``ev`` to ``sim`` now; returns the recorded copy (step = current step count, n_lit filled)."""
+    if ev.kind == "ignite":
+        assert ev.point is not None
+        r = ev.radius if ev.radius is not None else default_radius
+        n = sim.ignite(np.asarray(ev.point, float), r)
+        return Event("ignite", ev.t, sim.step_count, ev.point, r, None, None, n)
+    if ev.kind == "override":
+        assert ev.obj_id is not None and ev.material is not None
+        sim.set_material(ev.obj_id, MATERIAL_CLASSES.index(ev.material))
+        return Event("override", ev.t, sim.step_count, None, None, ev.obj_id, ev.material)
+    raise ValueError(f"unknown event kind {ev.kind!r}")
+
+
+def write_events(path: Path, events: list[Event]) -> None:
+    path.write_text("".join(json.dumps(asdict(e)) + "\n" for e in events))
+
+
+def read_events(path: Path) -> list[Event]:
+    out = []
+    for ln in path.read_text().splitlines():
+        if ln.strip():
+            d = json.loads(ln)
+            if d.get("point") is not None:
+                d["point"] = tuple(d["point"])
+            out.append(Event(**d))
+    return out
+
+
+def config_snapshot(grid_override: dict[str, Any] | None) -> dict[str, Any]:
+    """All configs a run depends on (app, sim, grid with override applied, render, materials)."""
+    return {
+        "app": load_yaml("app"),
+        "sim": load_yaml("sim"),
+        "grid": {**load_yaml("grid"), **(grid_override or {})},
+        "render": load_yaml("render"),
+        "materials": load_yaml_text((config_dir() / "materials.yaml").read_text()),
+    }
+
+
+def write_record(out: Path, events: list[Event], cfg: dict[str, Any], run: dict[str, Any]) -> None:
+    """Write events.jsonl, config_snapshot.yaml and run.json (seed, scene, final step, digest, ...)."""
+    out.mkdir(parents=True, exist_ok=True)
+    write_events(out / "events.jsonl", events)
+    (out / "config_snapshot.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    (out / "run.json").write_text(json.dumps(run, indent=2) + "\n")
+
+
+def build_sim_from_snapshot(cfg: dict[str, Any], scene: str): 
+    """Rebuild snapshot + FireSimulation from a recorded config snapshot. Returns ``(snapshot, sim)``."""
+    from livefire.scene.builder import snapshot_from_synthetic
+
+    snap = snapshot_from_synthetic(scene, cfg["grid"])
+    sim = FireSimulation(snap, MaterialTable(cfg["materials"]), Params(cfg["sim"]), cfg["app"])
+    return snap, sim
+
+
+def replay(run_dir: Path, render: bool = False) -> dict[str, Any]:
+    """Re-run the recorded simulation (no rendering unless ``render``) and compare the final digest.
+
+    Returns ``{"ok": bool, "expected": str, "actual": str, "steps": int}``. With ``render`` the final two-view
+    composites are written to ``<run_dir>/replay_cam<i>.png``."""
+    run = json.loads((run_dir / "run.json").read_text())
+    cfg = yaml.load((run_dir / "config_snapshot.yaml").read_text(), Loader=yaml.SafeLoader)
+    events = read_events(run_dir / "events.jsonl")
+    snap, sim = build_sim_from_snapshot(cfg, run["scene"])
+    default_r = float(cfg["sim"]["ignite_radius"]["value"])
+    for ev in sorted(events, key=lambda e: e.step):  # stable: recorded order within a step
+        sim.step(ev.step - sim.step_count)
+        apply_event(sim, ev, default_r)
+    sim.step(int(run["final_step"]) - sim.step_count)
+    st = sim.state_host()
+    actual = st.digest()
+    if render:
+        import cv2
+
+        from livefire.capture.types import Frame
+        from livefire.render.compositor import Compositor
+        from livefire.scene.synthetic import build_table_v1, render_view
+
+        comp, scene = Compositor(snap), build_table_v1()
+        for cid, calib in snap.cameras.items():
+            v = render_view(scene, calib, seed=0)
+            img = comp.render(cid, Frame(cid, v.rgb, 0, 0, calib.calib_version), sim)
+            cv2.imwrite(str(run_dir / f"replay_cam{cid}.png"), img[..., ::-1])
+    return {"ok": actual == run["digest"], "expected": run["digest"], "actual": actual, "steps": sim.step_count}

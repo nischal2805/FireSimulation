@@ -4,3 +4,9 @@ dt_sim: 0.0166666667   # 1/60 s
 max_substeps_per_frame: 4
 headless: true
 log_level: INFO
+# --- app runner (P0-010)
+fps: 30                       # display/video frame rate
+degrade_rt_threshold: 0.9     # sim rt factor below this for degrade_frames frames -> next ladder level
+degrade_frames: 30
+degrade_volume_scale: 0.35    # ladder level 1: renderer volume_scale
+degrade_step_factor: 1.0      # ladder level 2: renderer ray-march step_factor (h_gas units), plus level 1

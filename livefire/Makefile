@@ -13,7 +13,7 @@ lint:
 	uv run ruff check src tests bench
 
 run:
-	uv run python -m livefire.app run --scene table_v1 --seconds 8 --ignite "-0.075,0.0,0.05@0.5" --out out/demo
+	uv run python -m livefire.app run --scene table_v1 --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06" --out out/demo
 
 bench:
 	uv run python bench/run_bench.py

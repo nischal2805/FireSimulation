@@ -63,7 +63,15 @@ class Params:
         self._entries = entries
 
     def __getitem__(self, key: str) -> float:
-        return float(self.meta(key)["value"])
+        v = self.meta(key)["value"]
+        if isinstance(v, (list, tuple)):
+            raise ConfigError(f"{key}: list-valued, use vec()")
+        return float(v)
+
+    def vec(self, key: str) -> list[float]:
+        """List-valued entry (e.g. a colour) as floats; a scalar entry gives a 1-list."""
+        v = self.meta(key)["value"]
+        return [float(x) for x in (v if isinstance(v, (list, tuple)) else [v])]
 
     def meta(self, key: str) -> dict[str, Any]:
         """Full entry dict (value, unit, range, status) for `key`."""
@@ -91,10 +99,12 @@ def _validate(key: str, e: Any) -> None:
     if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
         raise ConfigError(f"{key}: range must be [lo, hi]")
     v = e["value"]
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        raise ConfigError(f"{key}: value must be a number, got {v!r}")
-    if not (rng[0] <= v <= rng[1]):
-        raise ConfigError(f"{key}: value {v} outside range {list(rng)}")
+    items = v if isinstance(v, (list, tuple)) and len(v) > 0 else [v]  # lists: every element checked
+    for x in items:
+        if isinstance(x, bool) or not isinstance(x, (int, float)):
+            raise ConfigError(f"{key}: value must be a number or list of numbers, got {v!r}")
+        if not (rng[0] <= x <= rng[1]):
+            raise ConfigError(f"{key}: value {x} outside range {list(rng)}")
 
 
 def load_params(name: str) -> Params:

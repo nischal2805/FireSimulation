@@ -1,4 +1,19 @@
 # Physical/artistic parameters use the form (PRD 8.1):
 #   name: {value: <v>, unit: "<u>", range: [lo, hi], status: physical_estimate|artistic}
-# Render tasks add their parameters here.
-{}
+# List values are allowed; the range applies to every element.
+# Volume renderer and compositor (P0-009, PRD 7.4). All artistic.
+volume_scale:   {value: 0.5,   unit: "-",      range: [0.25, 1.0],     status: artistic}
+step_factor:    {value: 0.5,   unit: "h_gas",  range: [0.1, 1.0],      status: artistic}
+t_min:          {value: 0.01,  unit: "-",      range: [0.0, 0.2],      status: artistic}
+feather_m:      {value: 0.01,  unit: "m",      range: [0.0, 0.1],      status: artistic}
+emission_scale: {value: 4.0,   unit: "-",      range: [0.0, 50.0],     status: artistic}
+T_emit_min:     {value: 700,   unit: "K",      range: [400, 1200],     status: artistic}
+T_emit_ref:     {value: 1400,  unit: "K",      range: [800, 3000],     status: artistic}
+emission_power: {value: 2.0,   unit: "-",      range: [0.5, 4.0],      status: artistic}
+k_abs:          {value: 2000,  unit: "m^2/kg", range: [0, 20000],      status: artistic}
+soot_albedo:    {value: 0.2,   unit: "-",      range: [0.0, 1.0],      status: artistic}
+ambient:        {value: 0.1,   unit: "-",      range: [0.0, 1.0],      status: artistic}
+char_dark:      {value: 0.85,  unit: "-",      range: [0.0, 1.0],      status: artistic}
+ash_color:      {value: [0.12, 0.11, 0.10], unit: "linear RGB", range: [0.0, 1.0], status: artistic}
+depth_tol:      {value: 0.02,  unit: "m",      range: [0.001, 0.2],    status: artistic}
+exposure:       {value: 1.0,   unit: "-",      range: [0.1, 10.0],     status: artistic}

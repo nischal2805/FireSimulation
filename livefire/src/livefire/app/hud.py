@@ -47,10 +47,12 @@ class HudInfo:
 def hud_lines(h: HudInfo) -> list[str]:
     """The HUD text lines."""
     holes = " ".join(f"cam{c}={100 * f:.1f}%" for c, f in sorted(h.hole_frac.items()))
+    deg = ("degradation ladder off" if h.offline
+           else f"degradation L{h.degradation.level} ({h.degradation.name})")
     lines = [
         (f"{h.state}   fps {h.fps:5.2f}   p95 frame {h.p95_ms:7.1f} ms   sim rt {h.rt_factor:5.3f}x   "
          f"sim t {h.t_sim:6.3f} s"),
-        f"degradation L{h.degradation.level} ({h.degradation.name})   holes {holes}   elements {h.n_elements}",
+        f"{deg}   holes {holes}   elements {h.n_elements}",
         "SYNTHETIC SCENE" + ("   OFFLINE (not real-time)" if h.offline else ""),
     ]
     return lines

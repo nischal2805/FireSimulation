@@ -84,3 +84,42 @@ def test_metal_override_prevents_burning():
     n1, burn1, dmg1 = go(True)
     assert n0 > 0 and burn0 > 0 and dmg0 > 0
     assert n1 == 0 and burn1 == 0 and dmg1 == 0
+
+
+def test_replay_rejects_out_of_order_events(run_dir, tmp_path):
+    out, _ = run_dir
+    for f in out.iterdir():
+        if f.is_file() and f.suffix != ".mp4":
+            (tmp_path / f.name).write_bytes(f.read_bytes())
+    ev = (tmp_path / "events.jsonl").read_text().splitlines()
+    (tmp_path / "events.jsonl").write_text("\n".join(reversed(ev)) + "\n")  # override (step 4) before ignite (0)
+    with pytest.raises(ValueError, match="before the current step"):
+        replay(tmp_path)
+
+
+def test_unknown_scene_rejected_before_building():
+    with pytest.raises(ValueError, match="unknown scene"):
+        Runner(RunConfig(scene="nope"))
+
+
+def test_failure_writes_record_and_stops_sources(tmp_path):
+    r = Runner(RunConfig(out=tmp_path, grid=16, frames=5, offline=True))
+    r.setup()
+
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    r.comp.render = boom
+    with pytest.raises(KeyboardInterrupt):
+        r.run()
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["status"] == "interrupted" and (tmp_path / "events.jsonl").is_file()
+    assert all(s._thread is None for s in r.sources)
+
+    r2 = Runner(RunConfig(out=tmp_path / "e", grid=16, frames=5, offline=True))
+    r2.setup()
+    r2.comp.render = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+    with pytest.raises(RuntimeError):
+        r2.run()
+    assert r2.life.state.value == "ERROR"
+    assert json.loads((tmp_path / "e" / "run.json").read_text())["status"] == "error"

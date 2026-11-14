@@ -19,6 +19,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from livefire.app.build import acquire_snapshot, build_sim, check_scene, load_synthetic_calibration
+from livefire.app.degradation import DegradationController
 from livefire.app.hud import HudInfo, draw_hud, make_ladder
 from livefire.app.lifecycle import Lifecycle, State
 from livefire.app.replay import Event, apply_event, config_snapshot, write_record
@@ -27,8 +29,6 @@ from livefire.common.config import Params, load_params, load_yaml
 from livefire.common.log import get_logger
 from livefire.common.timers import StageTimer
 from livefire.render.compositor import Compositor
-from livefire.scene.builder import ViewInput, build_snapshot, manual_material
-from livefire.scene.synthetic import build_table_v1, load_cameras, render_view
 from livefire.sim.coupled import FireSimulation
 from livefire.sim.materials import MaterialTable
 
@@ -68,8 +68,12 @@ class Runner:
         self.fps = float(cfg.fps if cfg.fps is not None else self.app.get("fps", 30))
         self.grid_override: dict[str, Any] = {"G": cfg.grid} if cfg.grid else {}
         self.timer = StageTimer()
+        check_scene(cfg.scene)  # before anything is built
         self.level = 0
+        self._frame = 0
         self.ladder = make_ladder(float(self.app["degrade_volume_scale"]), float(self.app["degrade_step_factor"]))
+        self.deg = DegradationController(self.ladder, float(self.app["degrade_rt_threshold"]),
+                                         int(self.app["degrade_frames"]))  # fmt: skip
         self.degradation_log: list[dict[str, Any]] = []
         self.sources: list[SyntheticCameraSource] = []
         self.sim: FireSimulation | None = None
@@ -81,22 +85,11 @@ class Runner:
         """UNINITIALIZED -> CALIBRATING -> ACQUIRING -> READY."""
         try:
             self.life.transition(State.CALIBRATING)  # P0: synthetic calibration
-            scene, cams = build_table_v1(), load_cameras()
+            scene, cams = load_synthetic_calibration(self.cfg.scene)
             self.life.transition(State.ACQUIRING)  # P0: render the synthetic views, build the snapshot
-            if self.cfg.scene != "table_v1":
-                raise ValueError(f"unknown scene {self.cfg.scene!r}")
-            views, rgb = {}, {}
-            for cid, calib in cams.items():
-                r = render_view(scene, calib, seed=0)
-                views[cid] = ViewInput(calib, r.depth, r.valid, r.obj_id, r.rgb)
-                rgb[cid] = r.rgb
-            tab = scene.objects_table()
-            self.snapshot = build_snapshot(
-                views, {o: manual_material(m) for o, (_, m) in tab.items()},
-                {**load_yaml("grid"), **self.grid_override}, names={o: nm for o, (nm, _) in tab.items()},
-            )  # fmt: skip
+            self.snapshot, rgb = acquire_snapshot(scene, cams, {**load_yaml("grid"), **self.grid_override})
             self.materials = MaterialTable.load()
-            self.sim = FireSimulation(self.snapshot, self.materials, load_params("sim"), self.app)
+            self.sim = build_sim(self.snapshot, self.materials, load_params("sim"), self.app)
             self.comp = Compositor(self.snapshot)
             self.sources = [SyntheticCameraSource(cid, rgb[cid], cams[cid].calib_version, self.fps) for cid in sorted(rgb)]
             self.life.transition(State.READY)
@@ -104,7 +97,9 @@ class Runner:
             self.life.transition(State.ERROR)
             raise
 
-    def _set_level(self, level: int, reason: str) -> None:
+    def apply_level(self, level: int, reason: str) -> None:
+        """Apply ladder ``level`` to the renderer (rebuilds the Compositor), set the DEGRADED flag, log it
+        (logger WARNING) and record it in ``degradation_log`` (never silent)."""
         lv = self.ladder[level]
         rp = load_params("render")
         e = copy.deepcopy({k: rp.meta(k) for k in rp.keys()})  # noqa: SIM118
@@ -141,21 +136,21 @@ class Runner:
         if not vw.isOpened():
             raise RuntimeError("cv2.VideoWriter could not open composite.mp4 (mp4v)")
         holes = {c: float(np.mean(snap.view_hole_mask[c])) for c in cids}
-        for s in self.sources:
-            s.start()
-        self.life.transition(State.SIMULATING)
-        frame_ms: deque[float] = deque(maxlen=_P95_WINDOW)
-        stamps: deque[float] = deque(maxlen=_FPS_WINDOW + 1)
-        rt_win: deque[tuple[float, float]] = deque(maxlen=60)
-        low_rt = 0
         csv_f = open(out / "timings.csv", "w", newline="")  # noqa: SIM115
         wr = csv.writer(csv_f)
         wr.writerow(_CSV_COLS)
+        frame_ms: deque[float] = deque(maxlen=_P95_WINDOW)
+        stamps: deque[float] = deque(maxlen=_FPS_WINDOW + 1)
+        rt_win: deque[tuple[float, float]] = deque(maxlen=60)
         t_loop0 = last = time.perf_counter()
         self._frame = 0
         rt = 0.0
         last_img = None
-        try:
+        status, error, digest = "ok", None, None
+        for src in self.sources:
+            src.start()
+        try:  # from here on: sources are stopped and the record is written on any exit, KeyboardInterrupt included
+            self.life.transition(State.SIMULATING)
             while True:
                 now = time.perf_counter()
                 if n_frames is not None:
@@ -190,11 +185,9 @@ class Runner:
                 self.timer.record("sim", sim_ms)
                 # degradation ladder (real-time only): rt < threshold for N consecutive frames -> next level
                 if not offline:
-                    low_rt = low_rt + 1 if rt < float(self.app["degrade_rt_threshold"]) else 0
-                    if low_rt >= int(self.app["degrade_frames"]) and self.level < len(self.ladder) - 1:
-                        self._set_level(self.level + 1, f"rt_factor {rt:.3f} < {self.app['degrade_rt_threshold']} "
-                                                         f"for {low_rt} frames")  # fmt: skip
-                        low_rt = 0
+                    new = self.deg.update(rt)
+                    if new is not None:
+                        self.apply_level(new, f"rt_factor {rt:.3f} < {self.deg.threshold} for {self.deg.frames} frames")
                 t_r = time.perf_counter()
                 views = [self.comp.render(c, frames[c], sim) for c in cids]
                 render_ms = (time.perf_counter() - t_r) * 1e3
@@ -227,25 +220,30 @@ class Runner:
                     spare = 1.0 / self.fps - (time.perf_counter() - t0)
                     if spare > 0:
                         time.sleep(spare)
-        except Exception:
-            self.life.transition(State.ERROR)
+        except BaseException as exc:
+            status, error = ("error" if isinstance(exc, Exception) else "interrupted"), repr(exc)
+            if isinstance(exc, Exception) and self.life.state is not State.ERROR:
+                self.life.transition(State.ERROR)
             raise
         finally:
-            for s in self.sources:
-                s.stop()
+            for src in self.sources:
+                src.stop()
             vw.release()
             csv_f.close()
+            try:
+                digest = sim.state_host().digest()
+            except Exception:  # noqa: BLE001 - best effort on the failure path
+                digest = None
+            if last_img is not None:
+                cv2.imwrite(str(out / "composite_last.png"), last_img[..., ::-1])
+            write_record(out, applied, config_snapshot(self.grid_override), {
+                "status": status, "error": error, "seed": int(self.app["seed"]), "scene": self.cfg.scene,
+                "final_step": sim.step_count, "t_sim": sim.t_sim, "digest": digest, "device": self.app["device"],
+                "mode": "offline" if offline else "realtime", "grid_G": int(snap.solid_mask.shape[0]),
+                "fps": self.fps, "frames": self._frame, "events_not_reached": [e.t for e in pending],
+                "lifecycle": self.life.state.value,
+            })  # fmt: skip
         wall = time.perf_counter() - t_loop0
-        if last_img is not None:
-            cv2.imwrite(str(out / "composite_last.png"), last_img[..., ::-1])
-        digest = sim.state_host().digest()
-        rest = list(pending)  # events never reached (t beyond the run) are reported, not silently dropped
-        write_record(out, applied, config_snapshot(self.grid_override), {
-            "seed": int(self.app["seed"]), "scene": self.cfg.scene, "final_step": sim.step_count,
-            "t_sim": sim.t_sim, "digest": digest, "device": self.app["device"], "mode": "offline" if offline else "realtime",
-            "grid_G": int(snap.solid_mask.shape[0]), "fps": self.fps, "frames": self._frame,
-            "events_not_reached": [e.t for e in rest],
-        })  # fmt: skip
         self.summary = {"frames": self._frame, "wall_s": wall, "t_sim": sim.t_sim, "rt_factor": rt, "digest": digest,
                         "final_degradation_level": self.level, "degradation_events": self.degradation_log,
                         "stages": self.timer.summary(), "gpu": "none", "framework": "warp-cpu"}  # fmt: skip

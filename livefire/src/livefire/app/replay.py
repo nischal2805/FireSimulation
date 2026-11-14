@@ -16,9 +16,12 @@ import numpy as np
 import yaml
 
 from livefire.common.config import Params, config_dir, load_yaml, load_yaml_text
+from livefire.common.log import get_logger
 from livefire.perception.material.types import MATERIAL_CLASSES
 from livefire.sim.coupled import FireSimulation
 from livefire.sim.materials import MaterialTable
+
+log = get_logger("livefire.app.replay")
 
 
 @dataclass(frozen=True)
@@ -109,13 +112,14 @@ def write_record(out: Path, events: list[Event], cfg: dict[str, Any], run: dict[
     (out / "run.json").write_text(json.dumps(run, indent=2) + "\n")
 
 
-def build_sim_from_snapshot(cfg: dict[str, Any], scene: str): 
-    """Rebuild snapshot + FireSimulation from a recorded config snapshot. Returns ``(snapshot, sim)``."""
-    from livefire.scene.builder import snapshot_from_synthetic
+def build_sim_from_snapshot(cfg: dict[str, Any], scene: str) -> tuple[Any, FireSimulation]:
+    """Rebuild snapshot + FireSimulation from a recorded config snapshot with the same helpers Runner.setup
+    uses (``livefire.app.build``). Returns ``(snapshot, sim)``."""
+    from livefire.app.build import acquire_snapshot, build_sim, load_synthetic_calibration
 
-    snap = snapshot_from_synthetic(scene, cfg["grid"])
-    sim = FireSimulation(snap, MaterialTable(cfg["materials"]), Params(cfg["sim"]), cfg["app"])
-    return snap, sim
+    scene_obj, cams = load_synthetic_calibration(scene)
+    snap, _ = acquire_snapshot(scene_obj, cams, cfg["grid"])
+    return snap, build_sim(snap, MaterialTable(cfg["materials"]), Params(cfg["sim"]), cfg["app"])
 
 
 def replay(run_dir: Path, render: bool = False) -> dict[str, Any]:
@@ -126,9 +130,16 @@ def replay(run_dir: Path, render: bool = False) -> dict[str, Any]:
     run = json.loads((run_dir / "run.json").read_text())
     cfg = yaml.load((run_dir / "config_snapshot.yaml").read_text(), Loader=yaml.SafeLoader)
     events = read_events(run_dir / "events.jsonl")
+    if run.get("digest") is None:
+        raise ValueError(f"{run_dir}: run has no digest (status {run.get('status')!r}); nothing to compare")
+    if str(cfg["app"].get("device", "cpu")) != "cpu":
+        log.warning("replaying on device %s: the digest is only guaranteed exact on CPU", cfg["app"]["device"])
     snap, sim = build_sim_from_snapshot(cfg, run["scene"])
     default_r = float(cfg["sim"]["ignite_radius"]["value"])
-    for ev in sorted(events, key=lambda e: e.step):  # stable: recorded order within a step
+    for ev in events:  # recorded order; steps must be non-decreasing
+        if ev.step < sim.step_count:
+            raise ValueError(f"event {ev.kind} at step {ev.step} is before the current step {sim.step_count} "
+                             "(events.jsonl is out of order or corrupt)")
         sim.step(ev.step - sim.step_count)
         apply_event(sim, ev, default_r)
     sim.step(int(run["final_step"]) - sim.step_count)

@@ -32,7 +32,7 @@ RADIUS_STEP = 1.25  # multiplicative step of the +/- keys
 
 @dataclass(frozen=True)
 class ClickResult:
-    """Outcome of a mouse click. ``reason``: ``ignited | hole | outside | no_depth | not flammable | no fuel |
+    """Outcome of a mouse click. ``reason``: ``ignited | hole | no surface | outside | no_depth | not flammable | no fuel |
     selected | no object``; ``point`` world (3,) m or None; ``event`` the recorded event (or None)."""
 
     reason: str
@@ -163,9 +163,9 @@ class InteractiveController:
             self.selected = obj
             self.message = f"selected object {obj} ({self.snap.objects[obj].name})"
             return ClickResult("selected", self.message, p, obj, pixel=cp.pixel, depth=cp.depth)
-        if elem < 0:  # valid depth but no scene element near it: room wall / background, treated like a hole
-            self.message = "hole: no scene surface at this pixel (room / background)"
-            return ClickResult("hole", self.message, p, pixel=cp.pixel, depth=cp.depth)
+        if elem < 0:  # valid depth but no scene element near it: room wall, background or silhouette fill
+            self.message = "no surface (hole): no scene element at this pixel"
+            return ClickResult("no surface", self.message, p, pixel=cp.pixel, depth=cp.depth)
         if not self.materials.flammable[int(self.mat[elem])]:
             name = self.materials.names[int(self.mat[elem])]
             self.message = f"not flammable ({name})"

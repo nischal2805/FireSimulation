@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
 from livefire.common.geometry import AABB, CameraCalibration, project, ray_dirs_camera
 
 DISC_FACTOR = 1.25
+_FRINGE = 15  # px, window for silhouette-fringe detection (splat discs reach several px past the silhouette)
 
 
 def iter_splat_pixels(
@@ -99,11 +101,30 @@ def view_occlusion(
     valid: NDArray,
     roi: AABB,
     normal: NDArray | None = None,
+    spacing: float = 0.0,
 ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
     """``(view_depth, view_hole_mask)``: element splat; else known-clear measured depth; else a
-    hole (depth 0, mask True)."""
+    hole (depth 0, mask True).
+
+    Silhouette rule: where the measured depth is valid and nearer than the chosen depth by more than
+    ``max(0.5 * spacing, 0.5 % of the depth)``, the measured depth wins (``min(splat, measured)``). At silhouette pixels
+    no element splat of the front object may cover the pixel, so the splat falls back to a surface behind it; the
+    measured (frozen) depth is evidence of a nearer surface, so it is used (conservative for occlusion). Such
+    pixels may have no element within 2 spacings (a click there reports "no surface")."""
     zbuf, covered = splat_depth(calib, pos, area, normal)
     clear = known_clear(calib, measured, valid, roi) & ~covered
     depth = np.where(covered, zbuf, np.where(clear, np.asarray(measured, dtype=np.float32), 0.0))
     hole = ~covered & ~clear
+    m = np.asarray(measured, dtype=np.float64)
+    tol = np.maximum(0.5 * spacing, 0.005 * depth)  # NOTE: tighter than max(2 spacings, 2 %): that left 3 cm errors
+    ok = np.asarray(valid, dtype=bool) & (m > 0) & (covered | clear)
+    nearer = ok & (m + tol < depth)
+    # Fringe rule: element splats are dilated discs (up to ~2 px past the true silhouette), so at a silhouette the
+    # splat of the front object also covers pixels that truly see the farther surface. There (and only there: a
+    # splat pixel with a farther or uncovered pixel within the fringe window) a measured depth farther than the splat by more
+    # than ``tol`` wins too, otherwise a click just outside the silhouette would resolve to the front object.
+    d_far = np.where(covered, depth, 1e6).astype(np.float32)
+    edge = cv2.dilate(d_far, np.ones((_FRINGE, _FRINGE), np.uint8)) > depth + 0.5 * spacing
+    farther = ok & covered & edge & (m > depth + tol)
+    depth = np.where(nearer | farther, m, depth)
     return depth.astype(np.float32), hole

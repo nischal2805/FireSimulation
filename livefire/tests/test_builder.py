@@ -119,6 +119,24 @@ def test_view_depth_and_holes(built):
         assert (snap.view_depth[cid][snap.view_hole_mask[cid]] == 0).all()
 
 
+def test_view_depth_not_behind_measured(built):
+    """The snapshot depth never lies behind the measured depth by more than the silhouette tolerance (a nearer
+    measured surface wins); and it is never nearer than the measured depth by more than the fringe tolerance
+    except inside the splat bias (interior pixels are covered by element splats, so the bound is loose)."""
+    _, _, rv, snap = built
+    s = snap.surfel_spacing
+    for cid, r in rv.items():
+        vd = snap.view_depth[cid].astype(np.float64)
+        m = r.depth.astype(np.float64)
+        both = r.valid & (vd > 0)
+        tol = np.maximum(0.5 * s, 0.005 * vd)
+        behind = both & (vd > m + tol + 1e-4)
+        print(f"\ncam{cid}: pixels with view_depth behind measured by > tol: {behind.sum()} of {both.sum()}")
+        assert not behind.any()
+        # roughly accurate everywhere valid (splats are discs of ~1.25 radius: some fringe error is expected)
+        assert np.percentile(np.abs(vd[both] - m[both]), 99) < 0.05
+
+
 def test_obstacles(built):
     snap = built[3]
     G = snap.solid_mask.shape[0]

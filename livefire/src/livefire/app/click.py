@@ -14,6 +14,8 @@ from livefire.common.geometry import backproject
 from livefire.scene.snapshot import SceneSnapshot
 
 _PICK_SPACINGS = 2.0  # pick radius in surfel spacings
+_PLANE_TOL = 0.25  # max normal distance of the point from an element plane, in spacings
+_AMBIG_M = 0.01  # m, normal-distance below which two objects' surfaces are indistinguishable at a pick
 _INPLANE_W = 0.05  # weight of the in-plane distance relative to the normal distance in the pick score
 
 
@@ -33,10 +35,10 @@ class ClickPoint:
 def resolve_click(snapshot: SceneSnapshot, cam_id: int, u: float, v: float) -> ClickPoint:
     """Back-project the click ``(u, v)`` [px, full resolution] of camera ``cam_id`` using the frozen depth.
 
-    Reference depth: the clicked pixel's own depth when valid; otherwise the nearest-depth cluster of the valid 3x3
-    neighbours. The depth used is the median of the valid 3x3 neighbours within ``max(2 surfel spacings, 2 % of the
+    A hole pixel gives ``hole`` (depth is never borrowed from neighbours, which may be another surface). Reference
+    depth: the clicked pixel's own depth. The depth used is the median of the valid 3x3 neighbours within ``max(2 surfel spacings, 2 % of the
     reference depth)`` of the reference, so a click near a silhouette never takes the depth of the surface behind.
-    Reasons: ``outside`` (outside the image), ``no_depth`` (unknown camera or no valid depth around the pixel)."""
+    Reasons: ``outside`` (outside the image), ``hole``, ``no_depth`` (unknown camera)."""
     if cam_id not in snapshot.view_depth:
         return ClickPoint(None, "no_depth")
     depth, hole = snapshot.view_depth[cam_id], snapshot.view_hole_mask[cam_id]
@@ -46,19 +48,12 @@ def resolve_click(snapshot: SceneSnapshot, cam_id: int, u: float, v: float) -> C
     ui, vi = int(np.floor(u + 0.5)), int(np.floor(v + 0.5))
     if not (0 <= ui < w and 0 <= vi < h):
         return ClickPoint(None, "outside")
+    if hole[vi, ui] or not depth[vi, ui] > 0:
+        return ClickPoint(None, "hole", (ui, vi))  # never borrow depth from neighbours: it may be another surface
     sl = (slice(max(vi - 1, 0), vi + 2), slice(max(ui - 1, 0), ui + 2))
     d = depth[sl].astype(np.float64).ravel()
     ok = (~hole[sl] & (depth[sl] > 0)).ravel()
-    if not ok.any():
-        return ClickPoint(None, "hole" if hole[vi, ui] or not depth[vi, ui] > 0 else "no_depth", (ui, vi))
-    centre_ok = not hole[vi, ui] and depth[vi, ui] > 0
-    dv = np.sort(d[ok])
-    if centre_ok:
-        ref = float(depth[vi, ui])
-    else:  # largest cluster of mutually close depths, nearest one on ties
-        tol_c = np.maximum(2 * snapshot.surfel_spacing, 0.02 * dv)
-        counts = [(np.abs(dv - x) <= t).sum() for x, t in zip(dv, tol_c)]
-        ref = float(dv[int(np.argmax(counts))])
+    ref = float(depth[vi, ui])
     tol = max(2 * snapshot.surfel_spacing, 0.02 * ref)
     keep = ok & (np.abs(d - ref) <= tol)
     z = float(np.median(d[keep]))
@@ -95,10 +90,18 @@ def pick_element_at(snapshot: SceneSnapshot, point: np.ndarray) -> tuple[int, in
         return -1, -1
     d = snapshot.pos.astype(np.float64) - np.asarray(point, np.float64)
     d2 = np.sum(d * d, axis=1)
-    cand = d2 <= (_PICK_SPACINGS * snapshot.surfel_spacing) ** 2
+    dn = np.sum(d * snapshot.normal.astype(np.float64), axis=1)
+    # within 2 spacings and within 0.25 spacing of the element's own plane (an element the point is far above is not the
+    # surface that was hit, e.g. a table element under the side of a box)
+    cand = (d2 <= (_PICK_SPACINGS * snapshot.surfel_spacing) ** 2) & (np.abs(dn) <= _PLANE_TOL * snapshot.surfel_spacing)
     if not cand.any():
         return -1, -1
-    dn = np.sum(d * snapshot.normal.astype(np.float64), axis=1)
     score = np.where(cand, dn * dn + _INPLANE_W * np.maximum(d2 - dn * dn, 0.0), np.inf)
     i = int(np.argmin(score))
+    # Ambiguity: another object has an element in range that is (nearly) as well aligned with the point, e.g. cloth
+    # lying 3 mm above the table at its rim. Surfel resolution cannot tell them apart, so report no pick (-1).
+    best_dn = abs(float(dn[i]))
+    other = (d2 <= (_PICK_SPACINGS * snapshot.surfel_spacing) ** 2) & (snapshot.obj_id != snapshot.obj_id[i])
+    if other.any() and float(np.min(np.abs(dn[other]))) <= max(2.0 * best_dn, _AMBIG_M):
+        return -1, -1
     return i, int(snapshot.obj_id[i])

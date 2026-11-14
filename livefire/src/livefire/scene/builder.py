@@ -87,7 +87,7 @@ def build_snapshot(
 
     vd, vh = {}, {}
     for cid, v in views.items():
-        vd[cid], vh[cid] = view_occlusion(v.calib, sf.pos, sf.area, v.depth, v.valid, roi, sf.normal)
+        vd[cid], vh[cid] = view_occlusion(v.calib, sf.pos, sf.area, v.depth, v.valid, roi, sf.normal, s)
 
     reg = ObjectRegistry()
     for o in sorted(materials):

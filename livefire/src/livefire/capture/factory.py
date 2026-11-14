@@ -35,7 +35,9 @@ def make_source(cfg: dict[str, Any], calib_version: int = 0) -> CameraSource:
     cam_id, typ = int(cfg["cam_id"]), cfg.get("type")
     w, h, fps = int(cfg.get("width", 0)), int(cfg.get("height", 0)), float(cfg.get("fps", 0))
     if typ == "usb":
-        return OpenCVCameraSource(cam_id, int(cfg["source"]), w, h, fps, cfg.get("backend", "auto"), calib_version)
+        return OpenCVCameraSource(
+            cam_id, int(cfg["source"]), w, h, fps, cfg.get("backend", "auto"), calib_version, fourcc=cfg.get("fourcc")
+        )
     if typ == "url":
         return OpenCVCameraSource(cam_id, str(cfg["source"]), w, h, fps, cfg.get("backend", "auto"), calib_version)
     if typ == "file":

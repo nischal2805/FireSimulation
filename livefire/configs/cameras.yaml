@@ -2,8 +2,9 @@
 # `source`: USB index (usb), stream URL (url: MJPEG over HTTP or RTSP), clip path (file), ignored for synthetic.
 # width/height/fps are requested best effort (0 = device default); the capture tool reports what the device gave.
 # `backend`: auto | dshow | msmf | v4l2 | ffmpeg (auto: DirectShow for USB on Windows, FFmpeg for URLs).
+# Optional usb key: fourcc (e.g. "MJPG"), set before width/height; often needed for 720p30 on Windows webcams.
 # Optional file keys: realtime (default true), loop (default false).
 cameras:
-  - {cam_id: 0, type: usb, source: 0, width: 1280, height: 720, fps: 30, backend: auto}
+  - {cam_id: 0, type: usb, source: 0, width: 1280, height: 720, fps: 30, backend: auto, fourcc: MJPG}
   # Phone as IP camera: Android "IP Webcam" -> http://<phone-ip>:8080/video ; DroidCam -> http://<ip>:4747/video
   - {cam_id: 1, type: url, source: "http://192.168.1.50:8080/video", width: 1280, height: 720, fps: 30, backend: auto}  # placeholder IP

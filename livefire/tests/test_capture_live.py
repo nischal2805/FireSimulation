@@ -26,10 +26,10 @@ W, H = 64, 48
 
 
 def _rgb(n: int) -> np.ndarray:
-    """Test image: pure RGB (200, 100, 30) with the frame number in the top-left 8x8 block's red/green."""
+    """Test image: RGB (200, 100, 30) background; top-left 16x16 block (n % 256, 40, 220) encodes frame number n."""
     img = np.empty((H, W, 3), np.uint8)
     img[:] = (200, 100, 30)
-    img[:8, :8] = (n % 256, 255 - n % 256, 0)
+    img[:16, :16] = (n % 256, 40, 220)
     return img
 
 
@@ -98,6 +98,7 @@ class _Mjpeg:
     def __init__(self, fps: float = 30.0, port: int = 0):
         outer = self
         self.n = 0
+        self.stall = False
 
         class H_(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -109,6 +110,9 @@ class _Mjpeg:
                 self.end_headers()
                 try:
                     while not outer.stopping:
+                        if outer.stall:  # stall mid-stream: connection stays open, no bytes
+                            time.sleep(0.05)
+                            continue
                         _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(_rgb(outer.n), cv2.COLOR_RGB2BGR))
                         outer.n += 1
                         self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpg))
@@ -282,3 +286,87 @@ def test_cli_capture_headless_file_source(clip, tmp_path, capsys):
     assert main(["capture", "--headless", "--seconds", "1.2", "--config", str(cfg), "--record", str(tmp_path / "o")]) == 0
     out = capsys.readouterr().out
     assert "fps=" in out and "skew=" in out and (tmp_path / "o" / "manifest.yaml").is_file()
+
+
+def test_rgb_channel_order_and_frame_number():
+    srv = _Mjpeg(fps=30)
+    s = OpenCVCameraSource(0, srv.url)
+    try:
+        s.start()
+        assert _wait(lambda: s.published >= 10)
+        f = s.latest()
+        blk = f.rgb[4:12, 4:12].reshape(-1, 3).mean(0)
+        r, g, b = blk
+        assert abs(g - 40) < 15 and abs(b - 220) < 15 and r != pytest.approx(b, abs=40)  # R,G,B order (not BGR)
+        n = round(r)  # frame number encoded in the red channel
+        assert f.seq <= n + 8 and n <= srv.n + 8
+    finally:
+        s.stop()
+        srv.close()
+
+
+def test_arrival_stamp_before_decode_and_retrieve_only_newest():
+    srv = _Mjpeg(fps=200)  # fast producer
+    s = OpenCVCameraSource(0, srv.url, fps=30)  # expected period 33 ms
+    try:
+        s.start()
+        assert _wait(lambda: s.grabbed > 100, timeout=10)
+        seqs = []
+        for _ in range(4):
+            time.sleep(0.2)
+            seqs.append(s.latest().seq)
+        assert s.retrieved < s.grabbed and s.dropped > 0 and s.dropped + s.retrieved == s.grabbed
+        assert s.published == s.retrieved
+        assert seqs == sorted(seqs) and seqs[-1] > seqs[0]  # newest wins, still advancing
+        f = s.latest()
+        assert f.t_arrive_ns <= time.perf_counter_ns()
+    finally:
+        s.stop()
+        srv.close()
+
+
+def test_stop_returns_when_server_stalls_mid_stream():
+    srv = _Mjpeg(fps=30)
+    s = OpenCVCameraSource(0, srv.url, timeout_ms=1000)
+    try:
+        s.start()
+        assert _wait(lambda: s.published >= 5)
+        srv.stall = True
+        time.sleep(0.2)
+        t0 = time.time()
+        s.stop()
+        assert time.time() - t0 < 1.0 + 1.0
+        assert s.status in ("stopped", "stopping")
+        if s.status == "stopping":  # thread still alive: restart must be refused
+            with pytest.raises(RuntimeError):
+                s.start()
+    finally:
+        srv.stall = False
+        s.stop()
+        srv.close()
+
+
+def test_failed_is_time_based_and_keeps_retrying():
+    srv = _Mjpeg(fps=30)
+    port = srv.port
+    s = OpenCVCameraSource(0, srv.url, backoff_min_s=0.1, backoff_max_s=0.2, failed_after_s=1.0, timeout_ms=500)
+    try:
+        s.start()
+        assert _wait(lambda: s.published >= 3)
+        srv.close()
+        assert _wait(lambda: s.status == "reconnecting")
+        assert _wait(lambda: s.status == "failed", timeout=10)
+        assert _wait(lambda: s.consecutive_failures >= 2, timeout=10)  # still retrying
+        srv = _Mjpeg(fps=30, port=port)
+        assert _wait(lambda: s.status == "connected", timeout=15)
+        assert s.consecutive_failures == 0
+    finally:
+        s.stop()
+        srv.close()
+
+
+def test_fourcc_validation_and_factory():
+    with pytest.raises(ValueError):
+        OpenCVCameraSource(0, 0, fourcc="MJ")
+    assert make_source({"cam_id": 0, "type": "usb", "source": 0, "fourcc": "MJPG"}).fourcc == "MJPG"
+    assert load_camera_configs()[0]["fourcc"] == "MJPG"

@@ -33,7 +33,7 @@ class VideoFileSource(_ThreadedSource):
         self._cap: cv2.VideoCapture | None = None
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        if self._alive():
             return
         cap = cv2.VideoCapture(str(self._path))
         if not cap.isOpened():

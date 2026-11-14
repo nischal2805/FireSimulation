@@ -46,9 +46,32 @@ path shells out to bash; paths use `pathlib`.
 | `make bench` | `uv run python bench/run_bench.py` |
 | `make bench-spike` | `uv run python bench/spike/run_spike.py` |
 | `make plots` | `uv run python bench/plots.py` |
+| `make capture` | `uv run python -m livefire.app capture` |
+| `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` |
+| `make latency-timer` | `uv run python -m livefire.app latency-timer` |
 
 Replay a recorded run: `uv run python -m livefire.app replay out/demo` (on a GPU device the final state is compared
 with a tolerance, see ADR-0002).
+
+## Live cameras and latency (P1)
+
+Cameras are listed in `configs/cameras.yaml` (1 or 2 entries; `type: usb|url|file|synthetic`). A USB camera is an
+index (DirectShow on Windows by default). A phone works as an IP camera: Android "IP Webcam" serves
+`http://<phone-ip>:8080/video`, DroidCam `http://<ip>:4747/video`; put the URL in `source` (phone and PC on the same
+Wi-Fi). Edit the placeholder `192.168.1.50` first.
+
+`python -m livefire.app capture [--record DIR] [--seconds N] [--headless] [--show-timer]` shows both feeds with
+per-camera measured fps, frame age (ms since arrival), inter-camera skew and connection status
+(`connected/reconnecting/failed`). `--record DIR` writes `cam<N>.mp4`, `timestamps.csv` and `manifest.yaml` (sha256).
+Press `q` or Esc to quit.
+
+Glass-to-glass latency (PRD 5.5), per camera:
+1. Run `python -m livefire.app latency-timer` and leave its big millisecond counter on a monitor.
+2. Point the camera at that monitor and run `python -m livefire.app capture --show-timer` (on the same PC; both
+   counters use the wall clock modulo 100 000 ms).
+3. Take a screenshot: the camera feed shows an old counter value, the "live timer" panel shows the current one.
+   Glass-to-glass latency = live value minus the value seen in the feed (repeat a few times; report the median;
+   it includes monitor refresh and capture latency, so it is an upper bound, resolution about one monitor frame).
 
 ## CPU-only note
 

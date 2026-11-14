@@ -8,7 +8,7 @@ dependencies = [
     "numpy",
     "scipy",
     "pyyaml",
-    "opencv-python-headless",
+    "opencv-python",
     "warp-lang",
     "matplotlib",
 ]

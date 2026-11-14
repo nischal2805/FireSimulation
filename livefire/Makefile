@@ -1,4 +1,4 @@
-.PHONY: setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -36,3 +36,14 @@ calibrate:
 
 eval:
 	@echo "not implemented until P1"; exit 2
+
+# Live cameras (configs/cameras.yaml): window with both feeds, fps/age/skew overlays; q or Esc quits
+capture:
+	uv run python -m livefire.app capture
+
+capture-headless:
+	uv run python -m livefire.app capture --headless --seconds 5
+
+# Glass-to-glass latency: film this window with a camera, then run `capture --show-timer`
+latency-timer:
+	uv run python -m livefire.app latency-timer

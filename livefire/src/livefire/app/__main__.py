@@ -25,11 +25,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tolerance", action="store_true",
                    help="compare final arrays with rtol=1e-5 atol=1e-6 instead of the exact digest (default on GPU)")
     p.add_argument("--render", action="store_true", help="also render the final two views to PNG")
+    from livefire.app.capture_cli import add_subparsers, run_command
+
+    add_subparsers(sub)
     argv = list(sys.argv[1:] if argv is None else argv)
     for i in range(len(argv) - 1, 0, -1):  # "--ignite -0.075,..." would be read as a flag: glue to "--ignite=..."
         if argv[i - 1] in ("--ignite", "--override"):
             argv[i - 1 : i + 1] = [f"{argv[i - 1]}={argv[i]}"]
     a = ap.parse_args(argv)
+
+    if a.cmd in ("capture", "latency-timer"):
+        return run_command(a)
 
     from livefire.app.replay import parse_ignite, parse_override, replay
     from livefire.app.runner import RunConfig, Runner

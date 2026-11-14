@@ -9,3 +9,4 @@ bench/traces/*
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+bench/results/quick_*

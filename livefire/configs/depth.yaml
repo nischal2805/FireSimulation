@@ -1,0 +1,31 @@
+# Monocular depth backend and table-plane anchoring (P1-004, ADR-0005; PRD 7.2, P1R3).
+# `backend` selects the DepthBackend; weights are cached under `model_cache_dir` (gitignored).
+# Device comes from configs/app.yaml (`device`), never from here.
+backend: da2_metric_small          # oracle | da2_metric_small | da2_relative_small
+model_cache_dir: data/models
+fp16_on_cuda: true                 # fp16 autocast of the network on CUDA; output is always float32
+input_size: 518                    # shorter image side fed to the network (multiple of 14); 0 = native
+backends:
+  da2_metric_small:
+    hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+    kind: metric                   # output is metres (scale-anchored)
+  da2_relative_small:
+    hf_id: depth-anything/Depth-Anything-V2-Small-hf
+    kind: disparity                # affine-invariant disparity (scale+shift-anchored in 1/z space)
+oracle:                            # MOCK: ground truth from the synthetic renderer (tests only)
+  seed: 1234
+  noise_sigma_m: 0.0
+  bias_m: 0.0
+  kind: metric                     # metric | disparity
+anchor:
+  min_inlier_ratio: 0.5            # below this the anchor fit raises DepthError
+  min_pixels: 400                  # table pixels needed for a fit
+  ransac_iters: 300
+  inlier_thresh_rel: 0.03          # RANSAC inlier threshold, fraction of plane depth (metric) / of table disparity span
+  seed: 1234
+  region:
+    mode: board_footprint          # board_footprint | polygon_xy
+    polygon_xy: []                 # world XY vertices [[x, y], ...] in metres when mode = polygon_xy
+    board_half_extent_xy: [0.20, 0.15]   # board footprint half sizes (m), world frame, centred on the origin
+    margin_m: {value: 0.10, unit: "m", range: [0.0, 1.0], status: artistic}   # footprint expansion
+  z_max_m: {value: 20.0, unit: "m", range: [1.0, 100.0], status: artistic}    # disparity -> depth cut-off

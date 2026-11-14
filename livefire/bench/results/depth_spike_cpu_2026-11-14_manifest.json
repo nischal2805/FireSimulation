@@ -1,0 +1,27 @@
+{
+  "tum": {
+    "sequence": "rgbd_dataset_freiburg3_long_office_household",
+    "url": "https://cvg.cit.tum.de/rgbd/dataset/freiburg3/rgbd_dataset_freiburg3_long_office_household.tgz",
+    "license": "CC BY 4.0",
+    "license_url": "https://cvg.cit.tum.de/data/datasets/rgbd-dataset",
+    "intrinsics": [
+      535.4,
+      539.2,
+      320.1,
+      247.6
+    ],
+    "depth_scale": 5000,
+    "frames": [
+      "fr3_lo_100",
+      "fr3_lo_158",
+      "fr3_lo_217",
+      "fr3_lo_276",
+      "fr3_lo_334",
+      "fr3_lo_393",
+      "fr3_lo_452",
+      "fr3_lo_569",
+      "fr3_lo_628",
+      "fr3_lo_686"
+    ]
+  }
+}

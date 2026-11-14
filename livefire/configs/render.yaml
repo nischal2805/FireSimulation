@@ -1,0 +1,4 @@
+# Physical/artistic parameters use the form (PRD 8.1):
+#   name: {value: <v>, unit: "<u>", range: [lo, hi], status: physical_estimate|artistic}
+# Render tasks add their parameters here.
+{}

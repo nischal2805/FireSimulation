@@ -1,0 +1,6 @@
+seed: 1234
+device: "cpu"   # "cuda:0" on the GPU machine
+dt_sim: 0.0166666667   # 1/60 s
+max_substeps_per_frame: 4
+headless: true
+log_level: INFO

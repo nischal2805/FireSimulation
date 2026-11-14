@@ -1,0 +1,6 @@
+G: 96
+roi_min: [-1.5, -1.5, -0.1]   # m, world frame
+roi_max: [1.5, 1.5, 2.9]      # m, world frame
+surfel_spacing: 0.015         # m
+neighbor_radius_factor: 1.5
+neighbor_k_max: 16

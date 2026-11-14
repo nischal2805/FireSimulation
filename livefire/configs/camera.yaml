@@ -1,0 +1,16 @@
+# Synthetic rig (P0). Intrinsics in pixels for the stored resolution; poses are world frame, metres.
+calib_version: 1
+width: 1280
+height: 720
+fx: 900.0
+fy: 900.0
+cx: 639.5
+cy: 359.5
+dist: [0.0, 0.0, 0.0, 0.0, 0.0]
+cameras:
+  cam0:
+    position: [1.0, -0.9, 0.7]
+    target: [0.0, 0.0, 0.08]
+  cam1:
+    position: [-0.6, -1.1, 0.65]
+    target: [0.0, 0.0, 0.08]

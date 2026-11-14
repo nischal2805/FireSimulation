@@ -12,3 +12,16 @@ ignition_decay: {value: 0.5,    unit: "1/s",      range: [0, 10],      status: a
 T_s_max:        {value: 1500,   unit: "K",        range: [800, 2500],  status: artistic}
 T_s_min:        {value: 250,    unit: "K",        range: [200, 300],   status: artistic}
 eps_m:          {value: 1.0e-6, unit: "kg/m^2",   range: [0, 1.0e-3],  status: artistic}
+
+# --- gas solver (P0-008, PRD 8.4; T_amb above is shared)
+rho_g:      {value: 1.2,   unit: "kg/m^3",    range: [0.1, 2.0],    status: physical_estimate}
+c_p:        {value: 1005,  unit: "J/(kg K)",  range: [500, 2000],   status: physical_estimate}
+g:          {value: 9.81,  unit: "m/s^2",     range: [0, 20],       status: physical_estimate}
+eps_vc:     {value: 0.3,   unit: "-",         range: [0, 2],        status: artistic}
+k_cool:     {value: 1.5,   unit: "1/s",       range: [0, 20],       status: artistic}
+k_soot:     {value: 0.3,   unit: "1/s",       range: [0, 10],       status: artistic}
+T_g_max:    {value: 2000,  unit: "K",         range: [1000, 3000],  status: artistic}
+cfl_max:    {value: 3.0,   unit: "-",         range: [0.5, 10],     status: artistic}
+n_iters:    {value: 60,    unit: "-",         range: [5, 500],      status: artistic}
+wind_speed: {value: 0.0,   unit: "m/s",       range: [0, 5],        status: artistic}
+wind_noise: {value: 0.0,   unit: "m/s",       range: [0, 1],        status: artistic}

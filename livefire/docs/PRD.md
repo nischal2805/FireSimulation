@@ -570,3 +570,4 @@ Date, status (proposed / accepted / superseded)
 ## Change log
 
 - v2: graphics-first phases; geometry contract; frozen-snapshot architecture; surface-element hybrid; numerical methods with units; burn-away levels; latency definitions; revised metrics; agent execution contract.
+- v2.1 (P0-008): ADR-0002 (accepted): gas velocity is stored staggered (MAC) internally; the public `FireState.vel` stays cell-centred `[G,G,G,3]`, exposed through an accessor; grid size must be even. ADR-0003 (accepted): combustion energy split `f_feedback` surface / `1 - f_feedback` gas, surface re-radiation, counted clamps on `T_s`, `T_g` and velocity (PRD 8.2, 8.4). `configs/sim.yaml` gains the gas section.

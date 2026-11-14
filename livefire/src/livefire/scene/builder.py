@@ -101,8 +101,9 @@ def build_snapshot(
     )  # fmt: skip
 
 
-def snapshot_from_synthetic(scene_name: str = "table_v1") -> SceneSnapshot:
-    """Render the synthetic scene and build its snapshot (ground-truth materials)."""
+def snapshot_from_synthetic(scene_name: str = "table_v1", grid_override: dict[str, Any] | None = None) -> SceneSnapshot:
+    """Render the synthetic scene and build its snapshot (ground-truth materials). ``grid_override`` updates
+    keys of ``configs/grid.yaml`` (e.g. ``{"G": 32}`` for a down-scaled gas grid)."""
     from livefire.scene.synthetic import build_table_v1, load_cameras, render_view
 
     if scene_name != "table_v1":
@@ -114,7 +115,7 @@ def snapshot_from_synthetic(scene_name: str = "table_v1") -> SceneSnapshot:
         views[cid] = ViewInput(calib, r.depth, r.valid, r.obj_id, r.rgb)
     tab = scene.objects_table()
     mats = {o: manual_material(m) for o, (_, m) in tab.items()}
-    return build_snapshot(views, mats, load_yaml("grid"), names={o: nm for o, (nm, _) in tab.items()})
+    return build_snapshot(views, mats, {**load_yaml("grid"), **(grid_override or {})}, names={o: nm for o, (nm, _) in tab.items()})
 
 
 def main(argv: list[str] | None = None) -> None:

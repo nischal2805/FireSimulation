@@ -1,115 +1,160 @@
 # LiveFire Previs
 
-Live two-camera virtual-fire previs. All fire is virtual. See `docs/PRD.md` for the spec and `docs/STATUS.md` for progress.
+Virtual fire for film previsualization. Two cameras look at a real table scene; the system reconstructs the scene's
+3D geometry and materials from the live frames, simulates fire spreading through the objects on the GPU, and
+composites the same 3D fire into both camera views in real time. **All fire is virtual**: nothing here controls real
+heat or flame.
 
-P0 is a synthetic vertical slice (no AI, no cameras).
+- Spec: [`docs/PRD.md`](docs/PRD.md) · Rules for agents: [`CLAUDE.md`](CLAUDE.md) · Progress: [`docs/STATUS.md`](docs/STATUS.md)
+- Handover notes (where the project is and where to go next): [`docs/HANDOVER.md`](docs/HANDOVER.md)
 
-Repository: https://github.com/nischal2805/FireSimulation (this project lives in the `livefire/` subfolder of that repo).
+## Status
+
+| Phase | What | State |
+| --- | --- | --- |
+| P0 | Contracts and a synthetic two-camera vertical slice (sim, gas solver, renderer, replay, benchmarks) | Done, Gate 0 approved |
+| P1 | Real cameras: live capture, click-to-ignite, ChArUco calibration, depth, fusion, live mode | In progress: capture, click-to-ignite (synthetic scene), calibration, depth and acquisition are built; **live mode on real cameras (P1-006) is not built yet** |
+| P2-P5 | Simulation quality, scene understanding, visual fidelity and performance, final evaluation | Not started |
+
+Everything so far was developed and tested on a CPU-only Linux machine. Nothing has run on a GPU or on Windows yet;
+treat the GPU and Windows paths as untested.
+
+## What you can run today
+
+| Feature | Command |
+| --- | --- |
+| Click on the synthetic scene to start fires | `uv run python -m livefire.app interactive --scene table_v1` |
+| Offline two-view fire demo video | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
+| See your cameras (fps, frame age, skew, status) and record clips | `uv run python -m livefire.app capture` (add `--record data/clips/run1 --seconds 10`) |
+| Print and use the calibration board | `uv run python -m livefire.app calib board --out board.png --dpi 300` |
 
 ## Setup
 
-Requires Python 3.11 exactly and [uv](https://docs.astral.sh/uv/). The environment is locked by `uv.lock`.
+Requirements: Python 3.11 (exactly) and [uv](https://docs.astral.sh/uv/). Dependencies are locked in `uv.lock`.
 
-```
-make setup   # uv sync --all-groups --all-extras (creates .venv, Python 3.11; --all-extras keeps taichi for the spike)
+```bash
+git clone -b agent/inspiring-maxwell-5od2va https://github.com/nischal2805/FireSimulation.git
 ```
 
-Run tools through `uv run` (the make targets do this for you).
+```bash
+cd FireSimulation/livefire
+```
+
+```bash
+uv sync --all-groups --all-extras
+```
+
+`--all-extras` installs the optional `spike` (Taichi) and `depth` (PyTorch + Transformers) extras. PyTorch comes from
+the CUDA 12.8 wheel index on Windows and the CPU index on Linux (see `pyproject.toml`).
+
+**GPU:** set `device: "cuda:0"` in `configs/app.yaml` (default `cpu`). Never hard-code `cuda` in code.
 
 ## Commands
 
-| Target | What it does |
+Run from the `livefire/` folder. `make` targets exist for Linux/macOS; on Windows (no `make`) use the right-hand
+column. No code path shells out to bash.
+
+| Make target | Command (works everywhere) | What it does |
+| --- | --- | --- |
+| `make setup` | `uv sync --all-groups --all-extras` | create `.venv` and install everything |
+| `make test` | `uv run pytest -m "not slow" -q` | fast tests |
+| `make test-slow` | `uv run pytest -q` | all tests incl. the 10-minute-simulated stability run |
+| `make lint` | `uv run ruff check src tests bench` | lint |
+| `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` | offline demo video `out/demo/composite.mp4` |
+| `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` | real-time run (needs a GPU to be real time) |
+| `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` | click-to-ignite viewer |
+| `make capture` | `uv run python -m livefire.app capture` | live camera check |
+| `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` | camera check without a window |
+| `make latency-timer` | `uv run python -m livefire.app latency-timer` | on-screen ms counter for glass-to-glass latency |
+| `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` | print-ready board (other `calib` subcommands below) |
+| `make bench` | `uv run python bench/run_bench.py` | benchmarks to `bench/results/*.csv` |
+| `make bench-spike` | `uv run python bench/spike/run_spike.py` | Warp vs Taichi kernel spike (decides ADR-0001) |
+| `make plots` | `uv run python bench/plots.py` | plots from the CSVs |
+| - | `uv run python bench/depth_spike.py` | depth model spike (ADR-0005) |
+| - | `uv run python -m livefire.app replay out/demo` | replay a recorded run and check its state digest |
+
+## Cameras
+
+Cameras are listed in [`configs/cameras.yaml`](configs/cameras.yaml) (one or two entries).
+
+- **USB webcam:** `type: usb`, `source: 0` (device index). On Windows DirectShow is used; `fourcc: MJPG` is usually
+  needed for 1280x720 at 30 fps.
+- **Phone as IP camera:** install an IP camera app (Android "IP Webcam": `http://<phone-ip>:8080/video`, DroidCam:
+  `http://<phone-ip>:4747/video`), put the URL in `source` with `type: url`. Phone and PC must be on the same Wi-Fi.
+  Replace the placeholder IP `192.168.1.50`.
+- Feeds always keep only the newest frame, stamp arrival time right after capture, and reconnect automatically;
+  a camera shows `failed` after 10 s down but keeps retrying.
+
+**Glass-to-glass latency:** run `latency-timer`, point the camera at that screen, run `capture --show-timer` on the same
+PC and take a screenshot: latency = live counter minus the counter visible in the camera image (repeat, use the median).
+
+## Calibration
+
+1. `calib board`: print `board.png` at 100 % on A4 landscape, mount it flat. Measure one square with a ruler and set
+   `board.square_length_m` in [`configs/calibration.yaml`](configs/calibration.yaml).
+2. Each camera: `uv run python -m livefire.app calib intrinsics --cam 0` (then `--cam 1`). Move the board over the whole
+   image with varied tilt; captures happen automatically when the board is still (`s` forces one, `f` finishes, at
+   least 20 views). Check the held-out RMS (target below 1 px).
+3. Lay the board flat on the table where all cameras see it: `uv run python -m livefire.app calib extrinsics --cams 0,1`
+   (averages 15 frames per camera). World origin = board centre, +Z up, table plane z = 0.
+4. The result is `data/calib/calib_vNNN.yaml` and becomes active. Changing camera resolution requires recalibration.
+
+Camera placement: 60-90 degrees apart, 1-1.5 m from the table, both seeing the table.
+
+## Interactive viewer (click to ignite)
+
+Mouse: left click ignites at the clicked surface (empty background and non-flammable objects only show a message),
+right click selects an object. Keys: `1`-`8` set the selected object's material (paper, cloth, wood, plastic, metal,
+glass, ceramic, other_nonflammable), `space` pause, `+`/`-` ignition radius, `o` geometry overlay, `v` single/dual view,
+`r` re-acquire, `s` screenshot, `q` quit. `--out DIR` sets where screenshots go; `--record` saves a replayable session.
+Today this runs on the synthetic scene; on real cameras it arrives with live mode (P1-006).
+
+## Configuration
+
+| File | Contents |
 | --- | --- |
-| `make test` | fast tests (`pytest -m "not slow"`) |
-| `make test-slow` | all tests, including the long-run and resolution tests |
-| `make lint` | `ruff check src tests bench` |
-| `make run` | offline CPU-friendly demo on the synthetic `table_v1` scene (writes to `out/demo`); change with `RUN_ARGS=...` (default `--grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"`) |
-| `make run-rt` | real-time run, default grid from `configs/grid.yaml`, 20 s wall, same ignition (writes to `out/demo_rt`) |
-| `make bench` | benchmark harness, writes CSVs to `bench/results/` |
-| `make bench-spike` | framework spike kernels benchmark |
-| `make plots` | plots generated from the CSVs in `bench/results/` |
-| `make calibrate CALIB_ARGS="..."` | calibration tool (see Calibration below), default prints the board |
-| `make interactive` | interactive viewer on the synthetic scene (click to ignite) |
-| `make eval` | placeholder, not implemented until P1 |
+| `configs/app.yaml` | seed, device (`cpu` / `cuda:0`), sim time step |
+| `configs/cameras.yaml` | live camera sources |
+| `configs/calibration.yaml` | ChArUco board and calibration settings |
+| `configs/depth.yaml` | depth model and table-plane anchoring |
+| `configs/acquisition.yaml` | acquisition window, TSDF fusion, object clustering, default materials |
+| `configs/grid.yaml` | region of interest and gas grid resolution |
+| `configs/sim.yaml`, `configs/render.yaml` | simulation and rendering parameters (each with unit, range, status) |
+| `configs/materials.yaml` | material table (PRD 8.5) |
+| `configs/camera.yaml` | the synthetic two-camera rig |
 
-## Windows (no make)
+## Project layout
 
-`make` is optional; on Windows 11 run the commands directly from the project root (PowerShell or cmd). No Python code
-path shells out to bash; paths use `pathlib`.
+```text
+livefire/
+  configs/            all tunables (YAML)
+  src/livefire/
+    common/           geometry contract, config, timers, interfaces, benchmark CSV
+    capture/          camera sources (USB, IP, file, synthetic), recorder
+    calib/            ChArUco board, intrinsics, extrinsics, calibration store
+    perception/depth/ depth backends (Depth Anything V2), table-plane anchoring
+    fusion/           depth accumulation, TSDF, surface extraction, objects
+    scene/            synthetic scene, snapshot builder, surface elements, occlusion
+    sim/              surface fire model, MAC gas solver, coupled simulation (Warp)
+    render/           volume renderer, overlays, compositor
+    app/              CLI, runner, interactive viewer, replay, HUD, calibration CLI
+  tests/              pytest suite (headless)
+  bench/              benchmarks, results CSVs, plots
+  docs/               PRD, status, handover, architecture, ADRs, task files, phase reports
+```
 
-| Make target | Equivalent |
-| --- | --- |
-| `make setup` | `uv sync --all-groups --all-extras` |
-| `make test` | `uv run pytest -m "not slow" -q` |
-| `make test-slow` | `uv run pytest -q` |
-| `make lint` | `uv run ruff check src tests bench` |
-| `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
-| `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
-| `make bench` | `uv run python bench/run_bench.py` |
-| `make bench-spike` | `uv run python bench/spike/run_spike.py` |
-| `make plots` | `uv run python bench/plots.py` |
-| `make capture` | `uv run python -m livefire.app capture` |
-| `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` |
-| `make latency-timer` | `uv run python -m livefire.app latency-timer` |
-| `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` |
-| `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` (print-ready board, A4 landscape, print at 100 %) |
-| | `uv run python -m livefire.app calib intrinsics --cam 0` (and `--cam 1`; `--from-dir DIR` for saved images): per-camera intrinsics |
-| | `uv run python -m livefire.app calib extrinsics --cams 0,1` (`--from-dir DIR` with cam0.png, cam1.png): world poses, writes calib_vNNN |
+## Known limitations
 
-Replay a recorded run: `uv run python -m livefire.app replay out/demo` (on a GPU device the final state is compared
-with a tolerance, see ADR-0002).
-
-## Live cameras and latency (P1)
-
-Cameras are listed in `configs/cameras.yaml` (1 or 2 entries; `type: usb|url|file|synthetic`). A USB camera is an
-index (DirectShow on Windows by default). A phone works as an IP camera: Android "IP Webcam" serves
-`http://<phone-ip>:8080/video`, DroidCam `http://<ip>:4747/video`; put the URL in `source` (phone and PC on the same
-Wi-Fi). Edit the placeholder `192.168.1.50` first.
-
-`python -m livefire.app capture [--record DIR] [--seconds N] [--headless] [--show-timer]` shows both feeds with
-per-camera measured fps, frame age (ms since arrival), inter-camera skew and connection status
-(`connected/reconnecting/failed`). `--record DIR` writes `cam<N>.mp4`, `timestamps.csv` and `manifest.yaml` (sha256).
-Press `q` or Esc to quit.
-
-Glass-to-glass latency (PRD 5.5), per camera:
-1. Run `python -m livefire.app latency-timer` and leave its big millisecond counter on a monitor.
-2. Point the camera at that monitor and run `python -m livefire.app capture --show-timer` (on the same PC; both
-   counters use the wall clock modulo 100 000 ms).
-3. Take a screenshot: the camera feed shows an old counter value, the "live timer" panel shows the current one.
-   Glass-to-glass latency = live value minus the value seen in the feed (repeat a few times; report the median;
-   it includes monitor refresh and capture latency, so it is an upper bound, resolution about one monitor frame).
-
-## Calibration (P1)
-
-1. `calib board`: print `board.png` at 100 % scale on A4 landscape, mount flat. MEASURE one square with a ruler; set `board.square_length_m` in `configs/calibration.yaml` (marker length scales automatically).
-2. Per camera: `calib intrinsics --cam N`. Move the board through the whole image with varied tilt; auto-capture fires when the board is still and the pose is new; the heat-map shows uncovered regions; press `s` to force a capture, `f` to finish (>= 20 views). Read the HELD-OUT RMS line (target < 1 px).
-3. Lay the board flat on the table, visible to all cameras, not moving. `calib extrinsics --cams 0,1`, SPACE per camera. World origin = board centre, +Z up toward the cameras; table plane z = 0. Check the reported reprojection RMS and consistency (mm).
-4. Result is `data/calib/calib_vNNN.yaml`, set active. Changing camera resolution requires recalibration (mismatch raises).
-
-## Interactive viewer (P1)
-
-`python -m livefire.app interactive --scene table_v1` opens the two composited views (synthetic scene, so you can
-try it before cameras are calibrated). Mouse: left click ignites at the clicked surface point (holes and
-non-flammable objects only show a message), right click selects an object. Keys: `1`..`8` set the selected object's
-material (paper, cloth, wood, plastic, metal, glass, ceramic, other_nonflammable), `space` pause/resume, `+`/`-`
-ignition radius, `o` geometry overlay, `v` single/dual view, `r` re-acquire request, `s` screenshot, `q` quit. Screenshots
-go to `--out DIR` (default `out/interactive`); `--record` also records the session there (events.jsonl with every click
-and override, replayable with `replay DIR`). The window is sized to the screen (`--max-width/--max-height` override).
-
-## CPU-only note
-
-This P0 work was developed and tested on a machine with no GPU. Warp runs on its CPU device, selected by
-`device: "cpu"` in `configs/app.yaml`. The GPU target is `device: "cuda:0"`, which is set by hand on the GPU machine.
-Never hard-code `cuda` in code.
-
-All benchmark numbers committed so far are CPU numbers and are labelled `gpu=none`. ADR-0001 (GPU framework) stays
-*proposed* until the RTX 4060 run. See `docs/PERFORMANCE_BUDGET.md`.
+- No fire spread between separate objects yet (radiative heat transfer is P2); fire stays on what you ignite.
+- Flames look like a glowing column; the flame appearance model is P4.
+- Single-camera depth accuracy on real scenes is unproven (the CPU spike on a public dataset gave 10-30 cm error);
+  a two-view refinement step may be needed.
+- Objects are found by geometry until segmentation (P3): a thin cloth lying on the table merges into the table.
+- All benchmark numbers are CPU numbers (`gpu=none`); see `docs/PERFORMANCE_BUDGET.md`.
 
 ## Documentation
 
-- `docs/ARCHITECTURE.md`: module map, lifecycle, ownership, field table
-- `docs/NUMERICAL_METHODS.md`: solver methods, ADRs, controller rulings, parameter files
-- `docs/COORDINATE_CONVENTIONS.md`: geometry contract as implemented
-- `docs/TEST_STRATEGY.md`: test files mapped to PRD section 10
-- `docs/PERFORMANCE_BUDGET.md`: benchmark CSVs and VRAM status
-- `docs/decisions/`: ADRs
+[`ARCHITECTURE`](docs/ARCHITECTURE.md) · [`NUMERICAL_METHODS`](docs/NUMERICAL_METHODS.md) ·
+[`COORDINATE_CONVENTIONS`](docs/COORDINATE_CONVENTIONS.md) · [`TEST_STRATEGY`](docs/TEST_STRATEGY.md) ·
+[`PERFORMANCE_BUDGET`](docs/PERFORMANCE_BUDGET.md) · [`decisions/`](docs/decisions) (ADRs) ·
+[`tasks/`](docs/tasks) (plans) · [`reports/`](docs/reports) (phase reports) · [`literature`](docs/literature.md)

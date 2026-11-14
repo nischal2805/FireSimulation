@@ -32,7 +32,7 @@ feed to start a fire**, running on their Windows 11 laptop with an RTX 4060 (CUD
 | P1-002 click-to-ignite | `app/click.py`, `app/interactive.py` (pure controller), `app/window.py` (thin OpenCV loop) | `python -m livefire.app interactive --scene table_v1` works on the synthetic scene. Click depth = centre pixel of the frozen snapshot `view_depth`; never ignites a different object than the one hit (tested vs renderer ground truth); ambiguous edges return "no surface". Keys: left click ignite, right click select, 1-8 material, space, +/-, o, v, r, s, q. |
 | P1-003 calibration | `calib/*`, `app/calib_cli.py`, `configs/calibration.yaml` | ChArUco 7x5, 35 mm squares (user must measure the print), held-out RMS, extrinsics averaged over 15 frames, world = board centre on table, +Z up. `python -m livefire.app calib board|intrinsics|extrinsics`. |
 | P1-004 depth | `perception/depth/*`, `bench/depth_spike.py`, ADR-0005 (proposed) | Depth Anything V2 Small (relative) primary, metric-indoor fallback; per-view anchoring to the calibrated table plane (P1R3). torch is the optional `depth` extra (CPU wheels on Linux, cu128 on Windows). |
-| P1-005 acquisition | `fusion/*`, `scene/acquire.py`, `configs/acquisition.yaml` | Accumulation, Warp TSDF, surfel extraction, table-plane + clustering objects, snapshot. See its report section in git log / commit message for numbers. |
+| P1-005 acquisition | `fusion/*`, `scene/acquire.py`, `configs/acquisition.yaml`, `scene/builder.py::snapshot_from_surfels` | **Implemented, NOT yet reviewed** (commit 13425f0): accumulation, Warp TSDF, surfel extraction, table-plane + clustering objects, snapshot. Synthetic results (CPU, oracle depth + noise): element p95 5 mm, table plane within 1.5 mm, object membership 93-94 %, 5 s window acquisition 9.4 s. Known gap: the cloth (3 mm above the table) merges into the table (needs P3 segmentation); zero-thickness paper shows edge ghosts up to ~4 cm. Use `acquire_with_report` for timings; pass per-camera depth backends (anchors are per camera). |
 
 All P0 machinery (sim, MAC gas solver, flame field, renderer, compositor, replay, benchmarks) is described in
 `docs/ARCHITECTURE.md`, `docs/NUMERICAL_METHODS.md` and ADR-0001..0004.
@@ -53,6 +53,7 @@ All P0 machinery (sim, MAC gas solver, flame field, renderer, compositor, replay
 
 ## 5. Where to steer next (recommended order)
 
+0. **Review P1-005 first** (spec + quality review of commit 13425f0 against `docs/tasks/P1-plan.md` Task 5), fix findings.
 1. **P1-006 live mode** (`docs/tasks/P1-plan.md`, Task 6): `python -m livefire.app live` = calibrate-load ->
    acquire -> READY -> simulate on live frames with the P1-002 controller, geometry overlay (`o`), change monitor,
    camera drop/recover, latency HUD. This is the feature the user is waiting for. Test headless with synthetic clips

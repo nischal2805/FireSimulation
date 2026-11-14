@@ -2,25 +2,22 @@
 
 | Field | Value |
 | --- | --- |
-| Phase | P0 complete in code; Gate 0 awaiting the user's GPU run and approval |
-| Last passing commit | 63829e8 (`make test`: 163 passed, 3 slow deselected; CPU) |
-| Gate 0 | recommended PASSED_WITH_APPROVED_DEVIATION, pending items in `docs/reports/phase-0.md` |
+| Phase | P1 in progress (Gate 0 approved 2026-11-14) |
+| Last passing commit | 13425f0 (`make test`: 249 passed, 4 slow deselected; CPU) |
+| Gate 1 | not started |
 
 ## Completed tasks
-- P0-001 .. P0-013 and P0-008b (see `docs/tasks/`), final whole-branch review and fix wave
-- Gate 0 report: `docs/reports/phase-0.md`
-
-## In progress
-- none
+- P0 (all), Gate 0 report `docs/reports/phase-0.md`
+- P1-001 live camera sources, P1-002 click-to-ignite (synthetic), P1-003 ChArUco calibration, P1-004 depth spike
+  (ADR-0005 proposed) — implemented and reviewed
+- P1-005 acquisition/fusion — implemented, review pending
 
 ## Blockers
-- No GPU in the development container. GPU validation (`make test-slow`, `make bench-spike`, `make bench` with
-  `device: "cuda:0"`) must run on the user's RTX 4060 (Windows 11).
-- Literature full-text fetch blocked (search-only citations).
+- Nothing has run on the user's RTX 4060 / Windows yet (GPU, cameras, window).
+- Monocular depth accuracy risk (see `docs/HANDOVER.md` section 4).
 
 ## Active ADRs
-- ADR-0001 (proposed): Warp primary, Taichi fallback; decided by the 4060 spike run
-- ADR-0002 MAC grid, ADR-0003 energy split, ADR-0004 combustion-intensity field
+- ADR-0001 (proposed), ADR-0002, ADR-0003, ADR-0004, ADR-0005 (proposed)
 
 ## Next task
-- User: GPU run and Gate 0 approval. Then P1 task planning (live cameras, calibration, depth, click-to-ignite).
+- Review P1-005, then P1-006 live mode (`docs/tasks/P1-plan.md`). Handover notes: `docs/HANDOVER.md`.

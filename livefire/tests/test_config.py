@@ -12,7 +12,8 @@ def test_values():
     assert load_yaml("app")["seed"] == 1234
     assert load_yaml("grid")["G"] == 96
     assert load_yaml("materials")["paper"]["T_ign"] == 505
-    assert load_params("sim").keys() == []
+    sim = load_params("sim")
+    assert sim["T_amb"] == 293.15 and sim["h_c"] == 25 and sim.meta("f_feedback")["status"] == "artistic"
 
 
 def test_env_dir(tmp_path, monkeypatch):

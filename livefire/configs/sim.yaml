@@ -1,4 +1,14 @@
 # Physical/artistic parameters use the form (PRD 8.1):
 #   name: {value: <v>, unit: "<u>", range: [lo, hi], status: physical_estimate|artistic}
-# Tasks 7, 8, 9 add their parameters here.
-{}
+# Tasks 8, 9 add their parameters here.
+
+# --- surface fire model (P0-007, PRD 8.2/8.3)
+T_amb:          {value: 293.15, unit: "K",        range: [250, 320],   status: physical_estimate}
+h_c:            {value: 25,     unit: "W/(m^2 K)", range: [1, 200],    status: physical_estimate}
+f_feedback:     {value: 0.3,    unit: "-",        range: [0, 1],       status: artistic}
+T_pilot:        {value: 900,    unit: "K",        range: [400, 1500],  status: artistic}
+ignite_radius:  {value: 0.03,   unit: "m",        range: [0.005, 0.2], status: artistic}
+ignition_decay: {value: 0.5,    unit: "1/s",      range: [0, 10],      status: artistic}
+T_s_max:        {value: 1500,   unit: "K",        range: [800, 2500],  status: artistic}
+T_s_min:        {value: 250,    unit: "K",        range: [200, 300],   status: artistic}
+eps_m:          {value: 1.0e-6, unit: "kg/m^2",   range: [0, 1.0e-3],  status: artistic}

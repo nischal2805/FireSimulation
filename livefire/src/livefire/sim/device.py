@@ -8,6 +8,10 @@ import warp as wp
 from livefire.common.config import load_yaml
 
 wp.config.quiet = True
+# gas.py scatters with float atomic_add, whose summation order is nondeterministic on CUDA. Warp's RUN_TO_RUN mode
+# makes such atomics reproducible between runs on the same GPU/driver/build. Must be set before any module is
+# created. GPU replay relies on it and must be confirmed on the RTX 4060 (ADR-0002); CPU is serial and exact.
+wp.config.deterministic = wp.DeterministicMode.RUN_TO_RUN
 _initialised = False
 
 

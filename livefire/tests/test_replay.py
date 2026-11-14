@@ -123,3 +123,23 @@ def test_failure_writes_record_and_stops_sources(tmp_path):
         r2.run()
     assert r2.life.state.value == "ERROR"
     assert json.loads((tmp_path / "e" / "run.json").read_text())["status"] == "error"
+
+
+def test_replay_tolerance_branch(run_dir, tmp_path):
+    """Non-CPU replay path (forced on CPU): compares final arrays from final_state.npz with a tolerance."""
+    out, _ = run_dir
+    assert (out / "final_state.npz").is_file()
+    r = replay(out, force_tolerance=True)
+    assert r["ok"] and r["mode"] == "tolerance"
+    # a tiny (below tolerance) perturbation passes, a large one fails
+    for f in out.iterdir():
+        if f.is_file() and f.suffix != ".mp4":
+            (tmp_path / f.name).write_bytes(f.read_bytes())
+    z = dict(np.load(tmp_path / "final_state.npz"))
+    z["T_g"] = z["T_g"] + 1e-4  # ~3e-7 relative at 293 K
+    np.savez(tmp_path / "final_state.npz", **z)
+    assert replay(tmp_path, force_tolerance=True)["ok"]
+    z["T_g"] = z["T_g"] + 1.0
+    np.savez(tmp_path / "final_state.npz", **z)
+    assert not replay(tmp_path, force_tolerance=True)["ok"]
+    assert replay(tmp_path)["ok"] and replay(tmp_path)["mode"] == "digest"  # CPU default stays exact digest

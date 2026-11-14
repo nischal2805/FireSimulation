@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -33,6 +34,11 @@ class FireStateHost:
         "T_s", "ignition_exposure", "m_fuel", "char", "removed", "burning",
         "T_g", "vel", "soot", "p", "flame",
     )  # fmt: skip
+
+    def save_arrays(self, path: Path) -> None:
+        """Write all state arrays plus ``t_sim``/``step`` to a ``.npz`` (replay tolerance comparison on GPU)."""
+        np.savez_compressed(path, t_sim=np.float64(self.t_sim), step=np.int64(self.step),
+                            **{n: getattr(self, n) for n in self._ARRAYS})  # fmt: skip
 
     def digest(self, decimals: int = 6) -> str:
         """sha256 over arrays rounded to ``decimals`` (names, shapes, then bytes), plus step and

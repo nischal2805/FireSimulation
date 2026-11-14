@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import datetime
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -102,6 +103,22 @@ def git_sha() -> str:
     return sha + ("-dirty" if _run(["git", "status", "--porcelain"]) else "")
 
 
+def _cuda_version() -> str:
+    """CUDA version from the ``nvidia-smi`` banner (parsed in Python, no shell); falls back to Warp's reported
+    CUDA driver version, then ``""``."""
+    m = re.search(r"CUDA Version:\s*([0-9.]+)", _run(["nvidia-smi"]))
+    if m:
+        return m.group(1)
+    try:
+        import warp as wp
+
+        wp.init()
+        v = int(wp.get_cuda_driver_version())  # e.g. 12040
+        return f"{v // 1000}.{(v % 1000) // 10}"
+    except Exception:  # noqa: BLE001 - best-effort environment capture
+        return ""
+
+
 def gpu_info(device: str, power_mode: str | None = None) -> dict[str, str]:
     """gpu/driver/cuda/power_mode/clocks strings.
 
@@ -114,11 +131,11 @@ def gpu_info(device: str, power_mode: str | None = None) -> dict[str, str]:
     fields = [
         "name", "driver_version", "clocks.sm", "clocks.max.sm", "power.management", "power.limit", "pstate",
     ]  # fmt: skip
-    q = _run(["nvidia-smi", f"--query-gpu={','.join(fields)}", "--format=csv,noheader"])
+    q = _run(["nvidia-smi", f"--query-gpu={','.join(fields)}", "--format=csv,noheader"])  # no shell: Windows-safe
     parts = [p.strip() for p in q.splitlines()[0].split(",")] if q else []
     parts += ["unknown"] * (len(fields) - len(parts))
     v = dict(zip(fields, parts, strict=True))
-    cuda = _run(["bash", "-c", "nvidia-smi | grep -o 'CUDA Version: [0-9.]*'"]).replace("CUDA Version: ", "")
+    cuda = _cuda_version()
     return {
         "gpu": v["name"],
         "driver": v["driver_version"],
@@ -127,6 +144,11 @@ def gpu_info(device: str, power_mode: str | None = None) -> dict[str, str]:
         or f"power.management={v['power.management']}; power.limit={v['power.limit']}; pstate={v['pstate']}",
         "clocks": f"sm={v['clocks.sm']}; max_sm={v['clocks.max.sm']} (at run start; note boost throttling)",
     }
+
+
+def device_label(device: str) -> str:
+    """Human-readable ``gpu=<name>, <framework>`` tag for console output, derived from the actual device."""
+    return f"gpu={gpu_info(device)['gpu']}, {warp_framework(device)}"
 
 
 def env_info() -> dict[str, str]:

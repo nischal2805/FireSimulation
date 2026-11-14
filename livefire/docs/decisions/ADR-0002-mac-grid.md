@@ -59,3 +59,12 @@ at G=32, about 13 MB at G=96), negligible.
   mirror-asymmetry after 60 steps is ~1e-5 relative L2 (test threshold 1e-3). The grid size must be even.
 - Soot is a mass concentration in kg/m^3 (`soot += soot_kg / h^3`, PRD 8.3; controller ruling). The
   `FireStateView` docstring in `interfaces.py` was corrected from "dimensionless mass fraction".
+
+## Addendum (P0 final review): GPU determinism
+
+`gas.py` scatters surface heat, soot and flame onto the grid with float `wp.atomic_add`; on CUDA the summation
+order is not fixed, so results can differ in the last bits between runs. `sim/device.py` therefore sets
+`wp.config.deterministic = wp.DeterministicMode.RUN_TO_RUN` (Warp 1.19) before any module is created. GPU replay
+relies on this and it has NOT been verified here (no GPU): confirm on the RTX 4060 that two identical runs agree.
+Independently, `replay` on a non-CPU device does not demand an exact digest: it compares the final state arrays saved
+in `final_state.npz` with `np.allclose(rtol=1e-5, atol=1e-6)`. On CPU the digest is exact.

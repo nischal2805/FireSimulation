@@ -25,6 +25,7 @@ from livefire.app.hud import HudInfo, draw_hud, make_ladder
 from livefire.app.lifecycle import Lifecycle, State
 from livefire.app.replay import Event, apply_event, config_snapshot, write_record
 from livefire.capture.synthetic_source import SyntheticCameraSource
+from livefire.common.bench_csv import gpu_info, warp_framework
 from livefire.common.config import Params, load_params, load_yaml
 from livefire.common.log import get_logger
 from livefire.common.timers import StageTimer
@@ -231,7 +232,9 @@ class Runner:
             vw.release()
             csv_f.close()
             try:
-                digest = sim.state_host().digest()
+                final = sim.state_host()
+                digest = final.digest()
+                final.save_arrays(out / "final_state.npz")
             except Exception:  # noqa: BLE001 - best effort on the failure path
                 digest = None
             if last_img is not None:
@@ -246,6 +249,7 @@ class Runner:
         wall = time.perf_counter() - t_loop0
         self.summary = {"frames": self._frame, "wall_s": wall, "t_sim": sim.t_sim, "rt_factor": rt, "digest": digest,
                         "final_degradation_level": self.level, "degradation_events": self.degradation_log,
-                        "stages": self.timer.summary(), "gpu": "none", "framework": "warp-cpu"}  # fmt: skip
+                        "stages": self.timer.summary(), "gpu": gpu_info(self.app["device"])["gpu"],
+                        "framework": warp_framework(self.app["device"])}  # fmt: skip
         (out / "timings_summary.json").write_text(json.dumps(self.summary, indent=2) + "\n")
         return self.summary

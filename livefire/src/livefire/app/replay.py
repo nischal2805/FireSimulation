@@ -2,8 +2,9 @@
 
 A run directory holds ``events.jsonl`` (one event per line, applied at a simulation step index),
 ``config_snapshot.yaml`` (every config the run used, incl. the grid override), ``run.json`` (seed, scene,
-final step, final ``FireStateHost.digest()``). Replay re-runs the simulation only and compares digests
-(CPU: exact)."""
+final step, final ``FireStateHost.digest()``) and ``final_state.npz`` (all final state arrays). Replay re-runs the
+simulation only. CPU: exact digest match. Non-CPU device: float atomics may differ in the last bits, so the final
+arrays are compared with ``np.allclose(rtol=GPU_RTOL, atol=GPU_ATOL)`` against ``final_state.npz``."""
 
 from __future__ import annotations
 
@@ -22,6 +23,25 @@ from livefire.sim.coupled import FireSimulation
 from livefire.sim.materials import MaterialTable
 
 log = get_logger("livefire.app.replay")
+
+GPU_RTOL, GPU_ATOL = 1e-5, 1e-6  # non-CPU replay tolerance on the final state arrays
+
+
+def compare_states(expected_npz: Path, actual: Any, rtol: float = GPU_RTOL, atol: float = GPU_ATOL) -> tuple[bool, str]:
+    """Compare ``actual`` (``FireStateHost``) against a saved ``final_state.npz``. Returns ``(ok, detail)``;
+    ``detail`` names the worst array and its max abs difference."""
+    ok, worst = True, ("", 0.0)
+    with np.load(expected_npz) as z:
+        if int(z["step"]) != int(actual.step):
+            return False, f"step {int(actual.step)} != {int(z['step'])}"
+        for name in actual._ARRAYS:
+            a, b = np.asarray(z[name], np.float64), np.asarray(getattr(actual, name), np.float64)
+            if a.shape != b.shape or not np.allclose(a, b, rtol=rtol, atol=atol):
+                ok = False
+            d = float(np.max(np.abs(a - b))) if a.shape == b.shape and a.size else float("inf")
+            if d > worst[1]:
+                worst = (name, d)
+    return ok, f"max abs diff {worst[1]:.3g} in {worst[0] or '-'} (rtol={rtol}, atol={atol})"
 
 
 @dataclass(frozen=True)
@@ -122,18 +142,22 @@ def build_sim_from_snapshot(cfg: dict[str, Any], scene: str) -> tuple[Any, FireS
     return snap, build_sim(snap, MaterialTable(cfg["materials"]), Params(cfg["sim"]), cfg["app"])
 
 
-def replay(run_dir: Path, render: bool = False) -> dict[str, Any]:
-    """Re-run the recorded simulation (no rendering unless ``render``) and compare the final digest.
+def replay(run_dir: Path, render: bool = False, force_tolerance: bool = False) -> dict[str, Any]:
+    """Re-run the recorded simulation (no rendering unless ``render``) and compare the final state.
 
-    Returns ``{"ok": bool, "expected": str, "actual": str, "steps": int}``. With ``render`` the final two-view
+    CPU (or ``force_tolerance=False`` on CPU): exact digest. Non-CPU device, or ``force_tolerance=True``: tolerance
+    comparison against ``final_state.npz``. Returns ``{"ok": bool, "expected": str, "actual": str, "steps": int,
+    "mode": "digest"|"tolerance", "detail": str}``. With ``render`` the final two-view
     composites are written to ``<run_dir>/replay_cam<i>.png``."""
     run = json.loads((run_dir / "run.json").read_text())
     cfg = yaml.load((run_dir / "config_snapshot.yaml").read_text(), Loader=yaml.SafeLoader)
     events = read_events(run_dir / "events.jsonl")
     if run.get("digest") is None:
         raise ValueError(f"{run_dir}: run has no digest (status {run.get('status')!r}); nothing to compare")
-    if str(cfg["app"].get("device", "cpu")) != "cpu":
-        log.warning("replaying on device %s: the digest is only guaranteed exact on CPU", cfg["app"]["device"])
+    tol = force_tolerance or str(cfg["app"].get("device", "cpu")) != "cpu"
+    if tol:
+        log.warning("replaying on device %s: comparing with tolerance rtol=%g atol=%g, not an exact digest",
+                    cfg["app"].get("device"), GPU_RTOL, GPU_ATOL)
     snap, sim = build_sim_from_snapshot(cfg, run["scene"])
     default_r = float(cfg["sim"]["ignite_radius"]["value"])
     for ev in events:  # recorded order; steps must be non-decreasing
@@ -157,4 +181,10 @@ def replay(run_dir: Path, render: bool = False) -> dict[str, Any]:
             v = render_view(scene, calib, seed=0)
             img = comp.render(cid, Frame(cid, v.rgb, 0, 0, calib.calib_version), sim)
             cv2.imwrite(str(run_dir / f"replay_cam{cid}.png"), img[..., ::-1])
-    return {"ok": actual == run["digest"], "expected": run["digest"], "actual": actual, "steps": sim.step_count}
+    if tol:
+        ok, detail = compare_states(run_dir / "final_state.npz", st)
+        mode = "tolerance"
+    else:
+        ok, detail, mode = actual == run["digest"], "exact digest", "digest"
+    return {"ok": ok, "expected": run["digest"], "actual": actual, "steps": sim.step_count, "mode": mode,
+            "detail": detail}

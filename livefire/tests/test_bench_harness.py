@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from livefire.common.bench_csv import REQUIRED, BenchmarkRecorder, read_rows
+from livefire.common.config import load_yaml
 
 BENCH = Path(__file__).resolve().parents[1] / "bench"
 
@@ -56,6 +57,7 @@ def test_plots_all_csvs_one_series_each(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_run_bench_quick_end_to_end(tmp_path: Path) -> None:
     out = tmp_path / "quick.csv"
+    device = str(load_yaml("app").get("device", "cpu"))  # run_bench defaults to the app.yaml device
     subprocess.run([sys.executable, str(BENCH / "run_bench.py"), "--quick", "--out", str(out)], check=True,
                    capture_output=True, text=True)  # fmt: skip
     rows = read_rows(out)
@@ -64,5 +66,9 @@ def test_run_bench_quick_end_to_end(tmp_path: Path) -> None:
     ]  # fmt: skip
     for r in rows:
         assert all(r[c] != "" for c in REQUIRED), r
-        assert r["gpu"] == "none" and r["framework"].endswith("-cpu") and int(r["samples"]) >= 5
+        assert int(r["samples"]) >= 5
+        if device == "cpu":
+            assert r["gpu"] == "none" and r["framework"].endswith("-cpu")
+        else:
+            assert r["gpu"] not in ("", "none") and not r["framework"].endswith("-cpu")
     assert "elements burning" in rows[0]["notes"] and "evolved state" in rows[-1]["notes"]

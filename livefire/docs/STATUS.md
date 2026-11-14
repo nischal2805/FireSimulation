@@ -11,6 +11,8 @@
 - P0-001: repo skeleton, uv env, config loader, timers, logger (14 tests, ruff clean)
 - P0-002: geometry module (cameras, transforms, depth, AABB, VoxelGrid) + 12 tests (26 total, ruff clean)
 
+- P0-003: interface Protocols, Frame/DepthResult/MaterialPrediction/SceneSnapshot/FireStateHost, MaterialTable + tests
+
 ## In progress
 - none
 
@@ -21,4 +23,4 @@
 - none
 
 ## Next task
-- P0-003
+- P0-004

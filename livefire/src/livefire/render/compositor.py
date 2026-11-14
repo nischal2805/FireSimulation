@@ -25,6 +25,7 @@ import warp as wp
 from numpy.typing import NDArray
 
 from livefire.capture.types import Frame
+from livefire.common.bench_csv import device_label
 from livefire.common.config import Params, load_params, load_yaml
 from livefire.common.geometry import AABB, CameraCalibration, project, ray_dirs_camera, zdepth_to_raydist
 from livefire.render.blackbody import T_LUT_MAX, T_LUT_MIN, blackbody_lut
@@ -41,7 +42,7 @@ SOOT_ACTIVE_EPS = 1e-6  # soot above this counts as an active cell (absorption b
 class ArrayFireState:
     """Simple ``FireStateView`` backed by NumPy or Warp arrays (prescribed fields; tests and demo).
 
-    T_g, soot: (G,G,G) float32 cell-centred [ix,iy,iz] (K, mass fraction); char, removed: (N_e,)
+    T_g, soot: (G,G,G) float32 cell-centred [ix,iy,iz] (K, soot density kg/m^3); char, removed: (N_e,)
     float32 0..1; h_gas metres; roi world AABB; flame: optional (G,G,G) float32 W/m^3 (None = no flame)."""
 
     T_g: Any
@@ -108,17 +109,18 @@ class _View:
         self.overlay = OverlayMap(snap, calib, snap.view_depth[calib.cam_id], p["depth_tol"])
 
     def pixel_rect(self, box: AABB) -> tuple[int, int, int, int]:
-        """Conservative (u0,u1,v0,v1) exclusive-end volume-pixel rectangle covering a world box."""
+        """Conservative (u0,u1,v0,v1) exclusive-end volume-pixel rectangle covering a world box, clamped to
+        the image; empty (u1<=u0 or v1<=v0) when the box projects fully outside the view."""
         c = np.array([[x, y, z] for x in (box.min[0], box.max[0]) for y in (box.min[1], box.max[1])
                       for z in (box.min[2], box.max[2])])  # fmt: skip
         uv, z, ok = project(self.calib_s, c)
         if not ok.all() or z.min() < 0.05:
             return 0, self.Ws, 0, self.Hs
-        u0 = max(int(np.floor(uv[:, 0].min())) - 2, 0)
-        u1 = min(int(np.ceil(uv[:, 0].max())) + 3, self.Ws)
-        v0 = max(int(np.floor(uv[:, 1].min())) - 2, 0)
-        v1 = min(int(np.ceil(uv[:, 1].max())) + 3, self.Hs)
-        return u0, u1, v0, v1
+        u0 = min(max(int(np.floor(uv[:, 0].min())) - 2, 0), self.Ws)
+        u1 = min(max(int(np.ceil(uv[:, 0].max())) + 3, 0), self.Ws)
+        v0 = min(max(int(np.floor(uv[:, 1].min())) - 2, 0), self.Hs)
+        v1 = min(max(int(np.ceil(uv[:, 1].max())) + 3, 0), self.Hs)
+        return u0, u1, v0, v1  # empty (u1<=u0 or v1<=v0) when the box is entirely off-view
 
 
 class Compositor:
@@ -183,8 +185,9 @@ class Compositor:
         flame = getattr(fire, "flame", None)
         Fn = None if flame is None else _to_np(flame)
         box = self._active_box(Tn, Sn, fire, Fn)
-        if box is not None:
-            u0, u1, v0, v1 = view.pixel_rect(box)
+        rect = view.pixel_rect(box) if box is not None else None
+        if box is not None and rect is not None and rect[1] > rect[0] and rect[3] > rect[2]:
+            u0, u1, v0, v1 = rect
             dsub = view.dirs_np[v0:v1, u0:u1].reshape(-1, 3).astype(np.float64)
             o = np.broadcast_to(view.origin, dsub.shape)
             an, af, ahit = box.ray_intersect(o, dsub)
@@ -289,7 +292,7 @@ def main(argv: list[str] | None = None) -> None:
         res = comp.render(cid, Frame(cid, v.rgb, 0, 0, calib.calib_version), st)
         cv2.imwrite(str(out / f"cam{cid}_composite.png"), res[..., ::-1])
         print(f"cam{cid}: render {comp.latency_ms:.0f} ms (volume {comp.last_volume_ms:.0f} ms, march "
-              f"{comp.last_march_ms:.0f} ms), wrote {out / f'cam{cid}_composite.png'}  [gpu=none, warp-cpu]")
+              f"{comp.last_march_ms:.0f} ms), wrote {out / f'cam{cid}_composite.png'}  [{device_label(comp.device)}]")
 
 
 if __name__ == "__main__":

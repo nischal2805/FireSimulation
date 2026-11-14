@@ -162,3 +162,27 @@ def test_overlay_paper_solid(rig):
         frac = float((r[inner] > 0.9).mean())
         print(f"cam{cid}: paper interior px {inner.sum()}, removed>0.9: {frac:.4f}")
         assert frac >= 0.99
+
+
+def test_active_cell_off_view_renders_without_error_and_is_dark(rig):
+    """Regression (final review C1): an active cell high above the scene projects outside at least one camera's
+    image; pixel_rect used to return an inverted rectangle and wp.launch raised on negative dims."""
+    snap, _, _, comp = rig
+    g = G
+    T = np.full((g, g, g), 293.15, np.float32)
+    S = np.zeros((g, g, g), np.float32)
+    F = np.zeros((g, g, g), np.float32)
+    iz = g - 2  # z ~ 2.8 m, far above the table
+    T[g // 2, g // 2, iz], S[g // 2, g // 2, iz], F[g // 2, g // 2, iz] = 1500.0, 1e-3, 5e6
+    st = ArrayFireState(T, S, np.zeros(len(snap.pos), np.float32), np.zeros(len(snap.pos), np.float32),
+                        snap.h_gas, snap.roi, F)  # fmt: skip
+    off_view = 0
+    for cid in snap.cameras:
+        view = comp.views[cid]
+        box = comp._active_box(T, S, st, F)
+        u0, u1, v0, v1 = view.pixel_rect(box)
+        T_vol, L_vol = comp.render_volume(cid, st)  # must not raise
+        if u1 <= u0 or v1 <= v0:
+            off_view += 1
+            assert np.all(L_vol == 0.0) and np.all(T_vol == 1.0)
+    assert off_view >= 1, "expected the high cell to be off-view for at least one camera"

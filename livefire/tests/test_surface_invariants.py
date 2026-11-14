@@ -95,7 +95,7 @@ def test_fuel_bounds_over_burn(snap, table):
     # ignite at a paper element of the real scene
     i0 = int(np.flatnonzero(snap.material_id == MID["paper"])[0])
     assert m.ignite(snap.pos[i0]) > 0
-    prev = m.m_fuel.numpy()
+    prev = m.m_fuel.numpy().copy()
     dt = 0.05
     for k in range(int(120 / dt)):
         m.step(dt, tg)
@@ -291,3 +291,12 @@ def test_ignite_radius_and_fire_state(table):
     assert fs.T_s.dtype == np.float32 and fs.burning.sum() == 5 and fs.step == 1
 
 
+
+
+def test_ignite_survives_next_step_large_dt(table):
+    m = SurfaceFireModel(grid_graph(5, 5, "paper"), table, sim_params(), DEV)
+    n = m.ignite(np.array([2 * S, 2 * S, 0.0]), radius=1.01 * S)
+    assert n == 5 and m.to_host()["burning"].sum() == 5  # burning set immediately
+    m.step(0.5, gas(293.15, m.n))
+    assert m.to_host()["burning"].sum() == 5
+    assert m.to_host()["m_fuel"].min() < table.m0[MID["paper"]]

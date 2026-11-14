@@ -43,12 +43,12 @@ def thermal_kernel(
 ):
     i = wp.tid()
     ti = t_in[i]
-    sig = _F64(5.670374419e-8)
+    sig = _F64(SIGMA)
     t4 = ti * ti * ti * ti
     ta4 = t_amb * t_amb * t_amb * t_amb
     q = h_c * (_F64(t_gas[i]) - ti) - eps[i] * sig * (t4 - ta4)
     if burning[i] != wp.uint8(0):
-        q += q_fb[i]
+        q += q_fb[i]  # full q_fb even on the burnout step (partial consumption): small, accepted overestimate
     p = _F64(0.0)
     for s in range(kmax):
         j = nb[i, s]
@@ -225,16 +225,18 @@ class SurfaceFireModel:
 
     def ignite(self, point: np.ndarray, radius: float | None = None) -> int:
         """User ignition: flammable elements within ``radius`` [m] (default ``ignite_radius``) of world
-        ``point`` get ``T_s = T_pilot`` and ``E = t_delay``. Returns the number of elements affected."""
+        ``point`` get ``T_s = T_pilot``, ``E = t_delay`` and ``burning = 1``. Returns the number of elements affected."""
         r = self._p["ignite_radius"] if radius is None else float(radius)
         dist = np.linalg.norm(self.pos - np.asarray(point, dtype=np.float64), axis=1)
         hit = (dist <= r) & self._flam_h & (self.m_fuel.numpy() > self._m_res_h + self._p["eps_m"])
         if hit.any():
-            t, e = self.T_s.numpy(), self.E.numpy()
+            t, e, b = self.T_s.numpy().copy(), self.E.numpy().copy(), self.burning.numpy().copy()
             t[hit] = self._p["T_pilot"]
             e[hit] = self._t_delay_h[hit]
+            b[hit] = 1  # R7: lit elements burn immediately, robust to the next thermal step
             self.T_s.assign(t)
             self.E.assign(e)
+            self.burning.assign(b)
         return int(hit.sum())
 
     def substeps_for(self, dt: float) -> int:
@@ -278,8 +280,9 @@ class SurfaceFireModel:
         """Copy of the dynamic state as NumPy float64 arrays (syncs); caller owns the copies."""
         wp.synchronize_device(self.device)
         return {
-            "T_s": self.T_s.numpy(), "E": self.E.numpy(), "m_fuel": self.m_fuel.numpy(),
-            "char": self.char.numpy(), "removed": self.removed.numpy(), "burning": self.burning.numpy(),
+            "T_s": self.T_s.numpy().copy(), "E": self.E.numpy().copy(), "m_fuel": self.m_fuel.numpy().copy(),
+            "char": self.char.numpy().copy(), "removed": self.removed.numpy().copy(),
+            "burning": self.burning.numpy().copy(),
         }  # fmt: skip
 
     def fire_state_host(self, T_g: np.ndarray, vel: np.ndarray, soot: np.ndarray, p: np.ndarray) -> FireStateHost:

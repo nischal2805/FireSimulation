@@ -3,8 +3,8 @@
 import time
 
 import numpy as np
-from scipy.ndimage import binary_erosion
 import pytest
+from scipy.ndimage import binary_erosion
 
 from livefire.common.config import load_yaml
 from livefire.common.geometry import project

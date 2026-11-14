@@ -3,14 +3,13 @@
 | Field | Value |
 | --- | --- |
 | Phase | P0 (contracts and synthetic vertical slice), in progress |
-| Last passing commit | P0-001 (see git log) |
+| Last passing commit | P0-003 (see git log) |
 | Gate 0 | not started |
 
 ## Completed tasks
 - Setup: repo folder, CLAUDE.md, AGENTS.md, docs/PRD.md, docs/STATUS.md, docs/{decisions,tasks,reports}/
 - P0-001: repo skeleton, uv env, config loader, timers, logger (14 tests, ruff clean)
 - P0-002: geometry module (cameras, transforms, depth, AABB, VoxelGrid) + 12 tests (26 total, ruff clean)
-
 - P0-003: interface Protocols, Frame/DepthResult/MaterialPrediction/SceneSnapshot/FireStateHost, MaterialTable + tests
 
 ## In progress

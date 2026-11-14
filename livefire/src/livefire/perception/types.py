@@ -29,8 +29,8 @@ class DepthResult:
             raise ValueError(f"valid must be bool {z.shape}, got {v.dtype} {v.shape}")
         if c.dtype != np.float32 or c.shape != z.shape:
             raise ValueError(f"conf must be float32 {z.shape}, got {c.dtype} {c.shape}")
-        if np.isnan(z).any() or np.isnan(c).any():
-            raise ValueError("depth/conf contain NaN; invalid pixels must be 0.0")
+        if not np.isfinite(z).all() or not np.isfinite(c).all():
+            raise ValueError("depth/conf contain NaN/inf; invalid pixels must be 0.0")
         if (z[~v] != 0.0).any():
             raise ValueError("invalid pixels must hold depth 0.0")
         if (c < 0.0).any() or (c > 1.0).any():

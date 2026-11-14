@@ -2,30 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
-from livefire.common.config import ConfigError, config_dir
+from livefire.common.config import ConfigError, config_dir, load_yaml_text
 from livefire.perception.material.types import MATERIAL_CLASSES
 
 _FUEL = ("m0_areal", "T_ign", "t_delay", "mdot_ref", "dH", "chi", "char_yield", "y_soot", "consumed_when_burnt")
 _COMMON = ("rho", "c", "k", "delta", "eps", "status")
 _STATUSES = {"physical_estimate", "artistic"}
 
-
-class _Loader(yaml.SafeLoader):
-    """SafeLoader that also reads YAML 1.2 floats such as ``1.4e7`` (PyYAML needs ``1.4e+7``)."""
-
-
-_Loader.add_implicit_resolver(
-    "tag:yaml.org,2002:float",
-    re.compile(r"^[-+]?(?:[0-9][0-9_]*)(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?$"),
-    list("-+0123456789."),
-)
 
 
 class MaterialTable:
@@ -104,7 +92,7 @@ class MaterialTable:
         p = Path(path) if path is not None else config_dir() / "materials.yaml"
         if not p.is_file():
             raise ConfigError(f"materials file not found: {p}")
-        data = yaml.load(p.read_text(), Loader=_Loader)
+        data = load_yaml_text(p.read_text())
         if not isinstance(data, dict):
             raise ConfigError(f"{p}: root must be a mapping")
         return cls(data)

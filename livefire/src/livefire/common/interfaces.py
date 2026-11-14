@@ -17,6 +17,13 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 
 from livefire.capture.types import Frame
+from livefire.common.errors import (
+    CalibVersionError,
+    DepthError,
+    MaterialError,
+    ReconstructionError,
+    SegmentationError,
+)  # fmt: skip
 from livefire.common.geometry import AABB, CameraCalibration
 from livefire.perception.material.types import MaterialPrediction
 from livefire.perception.types import DepthResult, SegmentationResult
@@ -27,9 +34,22 @@ from livefire.sim.state import FireStateHost
 # Contract: K (3,3) px for stored resolution (undistorted), dist (5,), T_world_from_camera
 # (4,4) camera->world float64, host memory, immutable; calib_version identifies the solve.
 __all__ = [
-    "BenchmarkRecorder", "CameraCalibration", "CameraSource", "DepthBackend", "FireStateView",
-    "MaterialBackend", "RendererBackend", "ReplayController", "SceneReconstructor",
-    "SegmentationBackend", "SimulationBackend",
+    "BenchmarkRecorder",
+    "CalibVersionError",
+    "CameraCalibration",
+    "CameraSource",
+    "DepthBackend",
+    "DepthError",
+    "FireStateView",
+    "MaterialBackend",
+    "MaterialError",
+    "ReconstructionError",
+    "RendererBackend",
+    "ReplayController",
+    "SceneReconstructor",
+    "SegmentationBackend",
+    "SegmentationError",
+    "SimulationBackend",
 ]  # fmt: skip
 
 
@@ -75,9 +95,9 @@ class CameraSource(Protocol):
 @runtime_checkable
 class DepthBackend(_BackendMetrics, Protocol):
     """Input: undistorted rgb uint8[H,W,3] (host or device; the backend declares and copies).
-    Output ``DepthResult``: z_depth_m f32[H,W] contiguous, Z-depth metres along camera +Z, on
-    device when the backend is GPU (host copy via ``.cpu()`` semantics is the caller's job);
-    valid bool[H,W]; conf f32[H,W] in [0,1] (state how calibrated in the implementation);
+    Output ``DepthResult``: z_depth_m f32[H,W] C-contiguous, Z-depth metres along camera +Z, in
+    host NumPy (CPU) memory: in P0 ``DepthResult`` is host-only even when the backend runs on
+    GPU (it copies back before returning); a GPU-resident variant is a P1 decision. valid bool[H,W]; conf f32[H,W] in [0,1] (state how calibrated in the implementation);
     invalid pixels = 0.0. Thread-safe. fp16 allowed internally; output f32. Synchronised:
     results are ready on return. Ownership: result arrays belong to the caller. Tied to the
     calib_version of its input frame (copied to the result). Raises DepthError on model
@@ -120,8 +140,9 @@ class MaterialBackend(_BackendMetrics, Protocol):
 @runtime_checkable
 class SceneReconstructor(_BackendMetrics, Protocol):
     """Fuses per-camera depth (+ segmentation + materials) into an immutable ``SceneSnapshot``.
-    Inputs: frames and DepthResults per cam_id (all with the same calib_version as
-    ``cameras``), segmentation per cam_id, ROI ``AABB`` (world metres), gas cell size.
+    Inputs: frames, DepthResults and SegmentationResults per cam_id (all with the same
+    calib_version as ``cameras``), ``materials`` (MaterialPrediction keyed by world obj_id),
+    ROI ``AABB`` (world metres) and ``h_gas`` (gas cell size, metres).
     Output: ``SceneSnapshot`` host NumPy arrays, read-only, world frame, caller-owned; built
     at acquisition/READY only (not per frame). Synchronous. Records ``calib_version``; any
     input mismatch raises CalibVersionError; insufficient/invalid depth raises
@@ -132,8 +153,10 @@ class SceneReconstructor(_BackendMetrics, Protocol):
         frames: dict[int, Frame],
         depths: dict[int, DepthResult],
         segmentations: dict[int, SegmentationResult],
+        materials: dict[int, MaterialPrediction],
         cameras: dict[int, CameraCalibration],
         roi: AABB,
+        h_gas: float,
     ) -> SceneSnapshot: ...
 
 

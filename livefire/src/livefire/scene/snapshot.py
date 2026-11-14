@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
 
 import numpy as np
 
 from livefire.capture.types import Frame
+from livefire.common.errors import CalibVersionError
 from livefire.common.geometry import AABB, CameraCalibration
 from livefire.perception.material.types import MATERIAL_CLASSES, MaterialPrediction
-
-
-class CalibVersionError(ValueError):
-    """Raised when a frame/camera calib_version does not match the snapshot's."""
 
 
 @dataclass
@@ -23,6 +21,9 @@ class WorldObject:
     name: str
     material: MaterialPrediction
     observations: dict[int, int] = field(default_factory=dict)  # cam_id -> per-camera instance id
+
+
+__all__ = ["CalibVersionError", "ObjectRegistry", "SceneSnapshot", "WorldObject", "assert_calib_version"]
 
 
 class ObjectRegistry:
@@ -47,7 +48,7 @@ class ObjectRegistry:
     def __len__(self) -> int:
         return len(self._objects)
 
-    def __iter__(self):  # type: ignore[no-untyped-def]
+    def __iter__(self) -> Iterator[WorldObject]:
         return iter(self._objects.values())
 
     def override_material(self, obj_id: int, material_name: str) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,22 @@ import yaml
 
 _STATUSES = {"physical_estimate", "artistic"}
 _FIELDS = ("value", "unit", "range", "status")
+
+
+class Yaml12Loader(yaml.SafeLoader):
+    """SafeLoader that also reads YAML 1.2 floats such as ``1.4e7`` (PyYAML needs ``1.4e+7``)."""
+
+
+Yaml12Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(r"^[-+]?(?:[0-9][0-9_]*)(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?$"),
+    list("-+0123456789."),
+)
+
+
+def load_yaml_text(text: str) -> Any:
+    """Parse YAML text with ``Yaml12Loader`` (safe; YAML 1.2 float literals)."""
+    return yaml.load(text, Loader=Yaml12Loader)
 
 
 class ConfigError(ValueError):
@@ -29,7 +46,7 @@ def load_yaml(name: str) -> dict[str, Any]:
     path = config_dir() / f"{name}.yaml"
     if not path.is_file():
         raise ConfigError(f"config file not found: {path}")
-    data = yaml.safe_load(path.read_text())
+    data = load_yaml_text(path.read_text())
     if data is None:
         return {}
     if not isinstance(data, dict):

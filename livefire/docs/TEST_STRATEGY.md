@@ -9,10 +9,10 @@ This file maps the existing test files to those items. It does not restate them.
 - `make test-slow`: `uv run pytest -q` (all tests, including the `slow` marker).
 - `make lint`: `ruff check src tests bench`.
 
-The `slow` marker is registered in `pyproject.toml`. It is used only in `tests/test_coupled.py`: the 10-minute
-simulated long run (PRD 8.6) and the R9 resolution-sensitivity test, which is marked `xfail(strict=False)` because
-it reports rather than gates in P0. The long run uses G=32 in this container; G=64 runs in `make test-slow` on the
-GPU machine.
+The `slow` marker is registered in `pyproject.toml`. It is used in `tests/test_coupled.py` (the 10-minute simulated
+long run, PRD 8.6, and the R9 resolution-sensitivity test, which is `xfail(strict=False)` because it reports rather
+than gates in P0) and in `tests/test_bench_harness.py`. The long run uses G=32 in this container; G=64 runs in
+`make test-slow` on the GPU machine.
 
 Tests are CPU-only. Warp runs on the `cpu` device. Taichi tests in `tests/test_spike_kernels.py` are skipped when
 Taichi is not importable.
@@ -27,7 +27,7 @@ Taichi is not importable.
 | 3. Numerical tests (PRD 8.6) | `test_surface_invariants.py`, `test_gas.py`, `test_flame_field.py`, `test_coupled.py` | Fuel bounds, non-flammables, zero-wind symmetry, conduction, projection divergence, sources, flame field, coupled step |
 | 4. Integration | `test_builder.py`, `test_render.py`, `test_coupled.py` | Snapshot matches fixture geometry; both views render the same fire state at its 3D position |
 | 5. Replay | `test_replay.py`, `test_coupled.py` | Same seed and inputs give the same `FireStateHost.digest()`; override behaviour |
-| 6. Benchmark | `test_bench_csv.py` | Appendix C CSV schema, row round-trip, required fields, CPU labelling |
+| 6. Benchmark | `test_bench_csv.py`, `test_bench_harness.py` | Appendix C CSV schema, row round-trip, required fields, CPU labelling; benchmark harness run (`slow`) |
 | 7. Eval scripts | none in P0 | `make eval` is a P1 target |
 
 Also in the suite and outside PRD 10's numbered list: `test_degradation.py` (degradation ladder, PRD 5.6) and

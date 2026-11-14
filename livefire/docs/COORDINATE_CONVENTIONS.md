@@ -7,8 +7,8 @@ what the code does with it. Implementation: `src/livefire/common/geometry.py`, t
 
 Integer pixel coordinates `(u, v)` denote pixel centres (OpenCV convention). `pixel_grid(width, height)` returns
 float64 grids `u, v` of shape `(height, width)` built from `arange`, so `(0, 0)` is the centre of the top-left pixel.
-The intrinsics in `configs/camera.yaml` follow the same rule. For the synthetic rig at 1280 x 720, `cx = 639.5` and
-`cy = 359.5` are the centres of the image, not `W/2` and `H/2`.
+The intrinsics in `configs/camera.yaml` (`cx`, `cy`) follow the same rule: they are pixel-centre values, not `W/2`
+and `H/2`.
 
 ## Transforms and back-projection
 

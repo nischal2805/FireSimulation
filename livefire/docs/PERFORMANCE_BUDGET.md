@@ -26,7 +26,6 @@ The table stays empty until the GPU run on the RTX 4060 (`make bench`, `make ben
 
 ## Rules
 
-- Benchmark method follows PRD 11.4: fixed recorded inputs, warm-up discarded, at least 5 repeats, median and p95,
-  power mode and GPU clocks recorded on the GPU machine.
+- Benchmark method: PRD 11.4 (applied by the harness in `bench/`).
 - Do not copy CSV values into reports or docs. Point to the CSV path.
 - Any mock or placeholder timing is marked and labelled in the output.

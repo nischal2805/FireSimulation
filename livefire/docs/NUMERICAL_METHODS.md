@@ -36,7 +36,7 @@ These are not in the PRD and are the code's behaviour.
 - **Ignition.** `ignite(point, radius)` sets `T_s = T_pilot`, `E = t_delay` and `burning = 1` for flammable,
   unburnt elements within the radius (R7). Lit elements burn until burnt out, so the thermal step cannot extinguish
   them. The default radius is `ignite_radius` in `configs/sim.yaml`.
-- **Flame reference.** `flame_ref` (`configs/render.yaml`, 3e4 W/m^3, retuned in P0-008b) sets the renderer's
+- **Flame reference.** `flame_ref` (`configs/render.yaml` key `flame_ref`; retuned in commit 9e24909, see ADR-0004) sets the renderer's
   flame emission, `T_vis = max(T_g, T_amb + dT_flame (1 - exp(-flame / flame_ref)))`, and the active-box threshold.
   The gas solver does not use it.
 - **Gas pressure storage.** Pressure is stored kinematically as `p / rho_g` (m^2/s^2). `FireSimulation.state_host()`

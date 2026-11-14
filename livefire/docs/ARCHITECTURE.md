@@ -39,11 +39,14 @@ Transitions outside the explicit `ALLOWED` table raise
   It is a copy, not an alias of device memory.
 - **Calibration** is checked, not trusted: every camera's `calib_version` must match the snapshot's, and a
   mismatch raises (`assert_calib_version`).
+- **Step stages.** `FireSimulation.stages(dt)` (`sim/coupled.py`) returns the ordered per-step callables
+  (`sample_gas`, `surface`, `gas`). `step()` and the benchmark both run these same callables, so the benchmark times
+  the production step.
 
 ## Field table (PRD 6.2)
 
 Surface arrays are per element, shape `(N_e,)`, where `N_e` is the number of surface elements. Gas arrays use the
-grid `G^3` from `configs/grid.yaml` (default `G = 96`). Internally, surface state is float64 and the gas solver is
+grid `G^3` set by `configs/grid.yaml` key `G`. Internally, surface state is float64 and the gas solver is
 float32. `FireStateHost` exports float32.
 
 | Field | Shape | Units | Memory layout | Owner | Initialisation |

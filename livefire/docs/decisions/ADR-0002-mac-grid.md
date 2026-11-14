@@ -20,14 +20,17 @@ cell-centred velocity. Interface Protocols (`FireStateView`, `FireStateHost`) mu
 ## Method (data, metrics, hardware, commands)
 
 Candidate 2 was implemented (`src/livefire/sim/gas.py`) and measured: `uv run pytest tests/test_gas.py -q -s`
-(CPU, Warp 1.19.0, no GPU; numbers labelled `gpu=none, framework=warp-cpu`). See
-`.superpowers/sdd/P0-plan/task-8-report.md` for the measured divergence reductions, mirror symmetry and drift.
+(CPU, Warp 1.19.0, no GPU; numbers labelled `gpu=none, framework=warp-cpu`). Measured values are inlined below.
 
 ## Results (table, CSV links)
 
 No benchmark CSV (correctness-only decision). Measured in tests (G=32, random face velocity, dt=1/60):
 projection reduces `||div u||_2` over fluid cells by 39.8x (5 iterations), 95.6x (10), 224x (20), 688x (60);
-faces touching solids/walls are exactly 0 after projection.
+faces touching solids/walls are exactly 0 after projection. Zero-wind symmetry (G=32, 60 steps, hot Gaussian blob at
+the x-y centre): centre-of-mass drift 4e-5 cells (limit 0.25), mirror asymmetry 1.4e-5 relative L2 (limit 1e-3).
+Cost on CPU (single-threaded Warp): about 0.4 ms per red-black half-sweep at G=32, about 59 ms per coupled step at
+60 iterations. Vorticity confinement is applied as `f = eps_vc * h * (N x omega)` [m/s^2] (N = normalised gradient
+of `|omega|`): an artistic, grid-scaled strength per unit time, not a physical coefficient.
 
 ## Scores (11.6)
 

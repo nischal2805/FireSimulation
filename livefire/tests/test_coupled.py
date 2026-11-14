@@ -192,7 +192,6 @@ def test_long_run_10_min_bounded(snap, table):
     s = sim.stats()
     print(f"\nlong run G={G}: {n_total} steps, wall {wall:.0f} s, peaks {peak}, clamp bound {vmax:.2f}, stats {s}")
     assert sim.step_count == n_total
-    assert s["T_g_clamp"] == 0 or peak["T_g"] <= p["T_g_max"]
 
 
 def cloth_response(snap, table, seconds: float, chunk: int = 12) -> dict[str, float | None]:

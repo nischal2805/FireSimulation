@@ -26,7 +26,10 @@ simulated minutes, clamp counters reported).
 ## Results (table, CSV links)
 
 Source injection test: `sum(dT_g) rho_g c_p h^3 == heat_W dt` to 1e-4 relative, with and without a solid next to the
-element (weights renormalised over fluid cells). Long-run results are in `task-8-report.md`.
+element (weights renormalised over fluid cells). Long run (G=32 table_v1, paper lit, 36000 steps = 10 simulated
+minutes, CPU, wall 2643 s): no NaN/Inf; peak `T_g` 293.18 K, peak soot 8.5e-6 kg/m^3, peak `|u|` 1.02 m/s (clamp bound
+16.9 m/s), peak `T_s` 422 K at the 600-step sampling points; all clamp counters 0 (the bounds did not bind in that
+scenario; they are exercised by the stressed test in `tests/test_gas.py`).
 
 ## Scores (11.6)
 

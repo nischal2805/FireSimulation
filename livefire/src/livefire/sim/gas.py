@@ -417,6 +417,8 @@ class GasSolver:
     ``T_g (G,G,G)`` [K], ``soot (G,G,G)`` [kg/m^3, mass concentration], ``p (G,G,G)`` kinematic
     pressure [m^2/s^2] (multiply by ``rho_g`` for Pa). ``solid_mask`` (G,G,G) uint8, host. World frame, index
     ``[ix,iy,iz]``, cell centre ``roi_min + (i+.5) h``. Parameters from ``configs/sim.yaml`` (``Params``).
+    Vorticity confinement is applied as ``f = eps_vc * h * (N x omega)`` [m/s^2] (N = normalised gradient of
+    ``|omega|``), i.e. an artistic, grid-scaled strength per unit time, not a physical coefficient.
     Single owner, not thread-safe. On CPU all kernels (including source scatter) are deterministic.
     """
 
@@ -516,15 +518,15 @@ class GasSolver:
         """Pressure projection (``n_iters`` red-black GS iterations, warm-started from the previous ``p``).
         Returns ``(||div||_2 before, after)`` over fluid cells [1/s] (syncs; for tests)."""
         self._norms.zero_()
-        self._project(dt, self._p["n_iters"] if n_iters is None else n_iters)
+        self._project(dt, int(self._p["n_iters"]) if n_iters is None else int(n_iters))
         return self.divergence_norms()
 
-    def _project(self, dt: float, n_iters: float) -> None:
+    def _project(self, dt: float, n_iters: int) -> None:
         d, G, h = self.device, self.G, self.h
         self.enforce_boundaries()
         self._divergence(0)
         h2_dt = h * h / dt
-        for _ in range(int(n_iters)):
+        for _ in range(n_iters):
             for color in (0, 1):
                 wp.launch(
                     rbgs_k, dim=(G, G, G // 2), device=d,
@@ -590,7 +592,7 @@ class GasSolver:
             wp.launch(clamp_face_k, dim=a.shape, inputs=[a, vmax, self._vel_clamps], device=d)
         # 7. projection
         self._norms.zero_()
-        self._project(dt, p["n_iters"])
+        self._project(dt, int(p["n_iters"]))
         # 8. cooling, soot decay, temperature clamp
         wp.launch(
             finish_k, dim=dim, device=d,

@@ -28,9 +28,9 @@ def params(**over: float) -> Params:
     return Params(e)
 
 
-def solver(solid: np.ndarray | None = None, g: int = G, **over: float) -> GasSolver:
-    s = np.zeros((g, g, g), np.uint8) if solid is None else solid
-    return GasSolver(g, 3.0 / g, ROI_MIN, s, params(**over), DEV, seed=7)
+def solver(solid: np.ndarray | None = None, grid_n: int = G, **over: float) -> GasSolver:
+    s = np.zeros((grid_n,) * 3, np.uint8) if solid is None else solid
+    return GasSolver(grid_n, 3.0 / grid_n, ROI_MIN, s, params(**over), DEV, seed=7)
 
 
 def random_velocity(s: GasSolver, seed: int = 0) -> None:
@@ -259,4 +259,58 @@ def test_wind_inflow_seeded_and_default_off():
 
 def test_odd_grid_rejected():
     with pytest.raises(ValueError):
-        solver(g=7)
+        solver(grid_n=7)
+
+
+def test_stressed_bounds_bind_and_hold():
+    """Strong heat source plus a small cfl_max and low T_g_max at G=16: the clamps must actually fire and the
+    fields must stay finite and bounded."""
+    g = 16
+    t_max, cfl = 600.0, 0.5
+    s = solver(grid_n=g, T_g_max=t_max, cfl_max=cfl)
+    h = 3.0 / g
+    r = np.random.default_rng(11)
+    s.set_velocity(*(30.0 * r.standard_normal(sh) for sh in ((g + 1, g, g), (g, g + 1, g), (g, g, g + 1))))
+    pt = wp.array(np.array([[0.1, -0.1, 0.4]], np.float32), dtype=wp.float32, device=DEV)
+    hw = wp.array(np.array([5.0e6], np.float32), dtype=wp.float32, device=DEV)  # ~ +10^4 K per step in a cell
+    sk = wp.array(np.array([1.0e-2], np.float32), dtype=wp.float32, device=DEV)
+    for _ in range(40):
+        s.step(DT, pt, hw, sk)
+        T, so = s.T_g.numpy(), s.soot.numpy()
+        assert np.isfinite(T).all() and np.isfinite(so).all()
+        assert T.max() <= t_max and so.min() >= 0.0
+        for a in (s.u, s.v, s.w):
+            assert np.isfinite(a.numpy()).all()
+    c = s.counters()
+    vmax = cfl * h / DT
+    m = max(float(np.abs(a.numpy()).max()) for a in (s.u, s.v, s.w))
+    print(f"\nstressed: counters {c}, max |face vel| {m:.2f} (clamp {vmax:.2f})")
+    assert c["T_g_clamp"] > 0 and c["vel_clamp"] > 0
+    assert m < 3.0 * vmax  # clamp is before projection; projection may exceed it modestly, never blow up
+
+
+def test_vorticity_confinement_preserves_vortex():
+    """Gaussian vortex (g=0, no cooling): with eps_vc > 0 the peak |omega| after N steps exceeds the eps_vc = 0 run."""
+
+    def run(eps: float) -> float:
+        s = solver(eps_vc=eps, g=0.0)  # g is the gravity parameter here: no buoyancy
+        sig, omega0, cx, cy = 3.0, 6.0, G / 2 - 0.3, G / 2 + 0.2  # core spin [rad/s], off-centre axis (cells)
+        iu = np.arange(G + 1)[:, None, None] * np.ones((1, G, G))  # u face x (cells), y-centre of cells
+        ju = (np.arange(G) + 0.5)[None, :, None] * np.ones((G + 1, 1, G))
+        iv = (np.arange(G) + 0.5)[:, None, None] * np.ones((1, G + 1, G))
+        jv = np.arange(G + 1)[None, :, None] * np.ones((G, 1, G))
+        gauss = lambda dx, dy: np.exp(-(dx**2 + dy**2) / (2 * sig**2))
+        u = -omega0 * H * (ju - cy) * gauss(iu - cx, ju - cy)
+        v = omega0 * H * (iv - cx) * gauss(iv - cx, jv - cy)
+        s.set_velocity(u, v, np.zeros((G, G, G + 1)))
+        for _ in range(40):
+            s.step(DT)
+        cv = s.velocity_cell_centered()
+        dvdx = np.gradient(cv[..., 1], H, axis=0)
+        dudy = np.gradient(cv[..., 0], H, axis=1)
+        return float(np.abs(dvdx - dudy).max())
+
+    w0, w1 = run(0.0), run(1.0)
+    print(f"\npeak |omega_z| after 40 steps: eps_vc=0 {w0:.3f}, eps_vc=1 {w1:.3f}")
+    assert np.isfinite(w0) and np.isfinite(w1) and w0 > 0
+    assert w1 > w0

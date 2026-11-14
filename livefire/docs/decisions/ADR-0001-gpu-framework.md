@@ -15,6 +15,7 @@ spiked.
 
 | | NVIDIA Warp | Taichi |
 | --- | --- | --- |
+| Install size (Linux x86_64 wheel, PyPI JSON) | 149.3 MB (`manylinux_2_28_x86_64`, includes CUDA libs) | 56.2 MB (`cp311 manylinux_2_27_x86_64`) |
 | Version tested | warp-lang 1.19.0 (PyPI upload 2026-11-02) | taichi 1.7.4 (PyPI upload 2025-07-31) |
 | License | Apache-2.0 (PyPI metadata) | Apache-2.0 (PyPI metadata) |
 | Backends | CPU (LLVM), CUDA (NVRTC) | CPU (LLVM 15.0.4, bundled), CUDA, others |
@@ -43,11 +44,11 @@ CSV: `bench/results/spike_cpu_2026-11-14.csv`. CPU only, `gpu=none`; framework l
 
 | Kernel | size | Warp cpu median / p95 ms | Taichi cpu median / p95 ms |
 | --- | --- | --- | --- |
-| advection | G=64 | 10.009 / 12.161 | 3.995 / 5.936 |
-| advection | G=96 | 33.664 / 38.274 | 10.257 / 17.875 |
-| advection | G=128 | 81.566 / 90.342 | 23.538 / 27.802 |
-| conduction | N=20k | 0.864 / 0.910 | 0.337 / 0.428 |
-| conduction | N=100k | 4.075 / 4.194 | 1.377 / 1.550 |
+| advection | G=64 | 10.116 / 15.160 | 4.004 / 5.839 |
+| advection | G=96 | 34.543 / 39.388 | 11.818 / 17.610 |
+| advection | G=128 | 82.697 / 91.862 | 23.802 / 28.476 |
+| conduction | N=20k | 0.857 / 0.892 | 0.334 / 0.453 |
+| conduction | N=100k | 4.076 / 5.885 | 1.377 / 1.912 |
 
 Caveat: Warp's CPU backend ran single-threaded (process CPU time / wall = 0.99), Taichi used about 3 of 4 cores
 (2.9). The ratio is therefore mostly thread count, not code-generation quality, and says little about GPU speed.
@@ -57,15 +58,19 @@ Other evidence (details in `.superpowers/sdd/P0-plan/task-4-report.md`):
 - Correctness: both match the NumPy reference (advection < 1e-4 including a large-displacement clamping case;
   conduction < 1e-5 on a [0,50) K field and < 5e-7 relative on 293-793 K). Repeat runs are bitwise identical in both.
 - Kernel code: 59 non-blank, non-comment lines each (5 decorated functions each); near line-for-line equivalent.
-- JIT (cold, CPU): Warp 1.86 s for the module (both kernels); Taichi 114 ms (advection) + 43 ms (conduction).
-- Interop: Warp `.numpy()` on CPU is a zero-copy view and `wp.array(..., copy=False)` aliases a NumPy array;
-  `wp.to_torch/from_torch/to_dlpack/from_dlpack` exist (PyTorch not installed here, not exercised). Taichi
-  `from_numpy`/`to_numpy` copy; no dlpack/torch helpers seen on ndarray (torch-tensor kernel arguments are
-  documented by Taichi but unverified here).
+- JIT (cold, CPU, from the CSV `notes`): Warp about 1.9 s for the module (both kernels); Taichi about 93 ms
+  (advection) + 47 ms (conduction). Only rows labelled "cold JIT first launch" in the CSV are true cold compiles.
+- Interop: Warp CPU `.numpy()` is a zero-copy view, `wp.array(..., copy=False)` aliases a NumPy buffer
+  (default copies), and `wp.to_torch/from_torch/to_dlpack/from_dlpack/to_jax` exist (PyTorch not installed
+  here, not exercised). Taichi `ti.types.ndarray` kernel arguments accept external NumPy (and, per Taichi docs,
+  torch) arrays directly: verified for NumPy (`test_taichi_kernel_accepts_numpy_directly`, error < 1e-4). Taichi
+  `ndarray.from_numpy/to_numpy` do copy. The spike runner keeps device-resident `ti.ndarray`s so timings exclude
+  host transfers. Net: interop is comparable; Warp has more explicit torch/DLPack helpers.
 - Maintenance: Warp 1.19.0 on 2026-11-02, releases 1.17.0 (2026-08-31), 1.18.0 (2026-10-05), 1.19.0rc1
   (2026-10-23), actively developed by NVIDIA. Taichi last release 1.7.4 on 2025-07-31 (about 15 months before
   today), previous 1.7.3 on 2024-12-23.
-- Blackwell (sm_120, RTX 50): Warp CHANGELOG (read in full text) has no explicit sm_120 entry; README states PyPI
+- Blackwell (sm_120, RTX 50): evidence is equal and unverified for both (no release note found claiming
+  sm_120 for either). Warp CHANGELOG (read in full text) has no explicit sm_120 entry; README states PyPI
   wheels use CUDA Toolkit 13.4, need driver R580+ and a Turing (sm_75) or newer GPU, which includes sm_120, and
   kernels are compiled at runtime by NVRTC. A web-search snippet (search-snippet only) reported a Warp 1.17/1.18
   issue reproduced on an RTX PRO 6000 Blackwell (sm_120). Taichi: no release note or issue found
@@ -80,19 +85,19 @@ Score 0-5 per criterion, weight in brackets; total = sum(score x weight) / 5. Dr
 | --- | --- | --- | --- |
 | Accuracy on project data (35) | 5 | 5 | Both match NumPy reference within thresholds |
 | Latency and VRAM on RTX 4060 (30) | 3 | 3 | **Provisional**: GPU not measured; CPU favours Taichi (3x, mostly threads) so no change |
-| Robustness (20) | 4 | 2 | Warp actively released, CUDA 13.4 wheels, bitwise-repeatable; Taichi stale since 2025-07, LLVM 15, Blackwell unverified; Warp CPU is single-threaded |
-| Implementation risk (10) | 4 | 3 | Same kernel size; Warp has zero-copy NumPy/PyTorch/DLPack interop; Taichi needs copies, but has much faster JIT |
+| Robustness (20) | 4 | 3 | Blackwell evidence equal (unverified for both), so scored evenly. Margin from release cadence/maintenance (Warp 2026-11 vs Taichi 2025-07), NVIDIA backing, CUDA 13 wheels. Warp CPU is single-threaded |
+| Implementation risk (10) | 4 | 4 | Same kernel size; both accept NumPy; Warp has torch/DLPack helpers, Taichi has ~20x faster cold JIT; both need Python-subset kernel syntax |
 | License (5) | 5 | 5 | Both Apache-2.0 |
-| **Total / 100** | **82** | **72** | |
+| **Total / 100** | **82** | **78** | |
 
 Hard limits: none triggered (no budget or VRAM figure exists yet; licences permit use).
 
 ## Decision and fallback
 
-Recommendation (proposed): **Warp** as the primary GPU framework; **Taichi** kept as the config-selectable
-fallback (kernels in `bench/spike/taichi_kernels.py` are a working port). Re-score the latency criterion
-with the RTX 4060 numbers from `make bench-spike` (device `cuda:0`) before accepting; if Taichi is more than
-about 1.5x faster on the 4060 for both kernels, reconsider (30-point criterion).
+Controller decision (recorded here; scores above are the implementer's draft): **Warp is the primary GPU
+framework; Taichi is the config-selectable fallback**, with the spike kernels kept in `bench/spike/` as the
+porting base. Status stays **proposed** until `make bench-spike` with device `cuda:0` on the RTX 4060 confirms it.
+The fallback triggers if Warp fails on the 4060 or 5050, or loses by more than 1.5x on the GPU spike.
 
 ## Consequences
 
@@ -100,6 +105,6 @@ about 1.5x faster on the 4060 for both kernels, reconsider (30-point criterion).
   CPU test grids stay at G=32 (slow marker for longer runs). Cold JIT on first launch (about 2 s here for two
   kernels) needs a warm-up step and Warp's kernel cache.
 - Simulation and render backends own their device arrays; use `.numpy()` views for host readback.
-- A Taichi fallback would add `taichi` (optional `spike` group) as a runtime dependency and requires copies for
-  NumPy interop.
+- A Taichi fallback would add `taichi` (optional `spike` group) as a runtime dependency; kernels port from
+  `bench/spike/taichi_kernels.py`.
 - Status stays proposed until the GPU run exists; CUDA path is untested in this container.

@@ -43,11 +43,16 @@ def run_intrinsics(spec: BoardSpec, views: list[View], size: tuple[int, int], ca
     return res
 
 
-def run_extrinsics(spec: BoardSpec, frames: dict[int, np.ndarray], root: Path, cfg: dict) -> tuple[int, ExtrinsicsResult]:
-    """Detect the board in one frame per camera, estimate world poses, store a new calib version."""
+def run_extrinsics(spec: BoardSpec, frames: dict[int, np.ndarray | list[np.ndarray]], root: Path,
+                   cfg: dict) -> tuple[int, ExtrinsicsResult]:
+    """Detect the board in one or several frames per camera, estimate averaged world poses, store a new calib version."""
     ec = cfg["extrinsics"]
     intr, views = {}, {}
-    for cid, img in frames.items():
+    first: dict[int, np.ndarray] = {}
+    for cid, fr in frames.items():
+        imgs = [fr] if isinstance(fr, np.ndarray) else list(fr)
+        img = imgs[0]
+        first[cid] = img
         intr[cid], stored_spec = load_intrinsics(root, cid)
         if stored_spec != spec:
             raise ValueError(f"cam{cid}: intrinsics were calibrated with a different board {stored_spec}; "
@@ -55,12 +60,11 @@ def run_extrinsics(spec: BoardSpec, frames: dict[int, np.ndarray], root: Path, c
         if (img.shape[1], img.shape[0]) != (intr[cid].width, intr[cid].height):
             raise ValueError(f"cam{cid}: frame is {img.shape[1]}x{img.shape[0]} but intrinsics are for "
                              f"{intr[cid].width}x{intr[cid].height}")
-        c, ids = detect_charuco(spec, img)
-        views[cid] = View(c, ids)
+        views[cid] = [View(*detect_charuco(spec, im)) for im in imgs]
     ext = estimate_extrinsics(spec, intr, views, min_corners=int(ec["min_corners"]),
                               max_reproj_rms_px=float(ec["max_reproj_rms_px"]),
                               max_consistency_m=float(ec["max_consistency_m"]))
-    ver = save_calibration(root, spec, intr, ext, frames)
+    ver = save_calibration(root, spec, intr, ext, first)
     print(ext.summary())
     print(f"saved calib_v{ver:03d} in {root} (active)")
     return ver, ext
@@ -114,6 +118,7 @@ def _capture_intrinsics_live(spec: BoardSpec, source: str, size: tuple[int, int]
                 break
             if k == ord("s") and view is not None:
                 views.append(view)
+                gate.captured.append(view)  # manual captures count for the auto-capture pose-diversity check
                 images[view.name] = frame.copy()
                 cov.add(view.corners)
     finally:
@@ -122,9 +127,10 @@ def _capture_intrinsics_live(spec: BoardSpec, source: str, size: tuple[int, int]
     return views, size, images
 
 
-def _capture_extrinsics_live(spec: BoardSpec, sources: dict[int, str], size: tuple[int, int]):  # pragma: no cover
-    """One frame per camera: SPACE grabs when the board is detected, q aborts."""
-    frames: dict[int, np.ndarray] = {}
+def _capture_extrinsics_live(spec: BoardSpec, sources: dict[int, str], size: tuple[int, int],
+                             n_frames: int = 1):  # pragma: no cover
+    """Per camera: SPACE starts grabbing ``n_frames`` frames with the board detected (keep it still), q aborts."""
+    frames: dict[int, list[np.ndarray]] = {}
     det = cv2.aruco.CharucoDetector(make_board(spec))
     for cid, src in sources.items():
         cap = _open_camera(src, *size)
@@ -137,15 +143,18 @@ def _capture_extrinsics_live(spec: BoardSpec, sources: dict[int, str], size: tup
                 vis = frame.copy()
                 if len(ids):
                     cv2.aruco.drawDetectedCornersCharuco(vis, c.reshape(-1, 1, 2).astype(np.float32), ids.reshape(-1, 1))
-                cv2.putText(vis, f"cam{cid}: {len(ids)} corners  [SPACE]=take [q]=abort", (10, 28),
+                got = frames.get(cid, [])
+                msg = f"grabbing {len(got)}/{n_frames}" if got else "[SPACE]=take"
+                cv2.putText(vis, f"cam{cid}: {len(ids)} corners  {msg} [q]=abort", (10, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                 cv2.imshow("calib extrinsics", vis)
                 k = cv2.waitKey(1) & 0xFF
                 if k == ord("q"):
                     raise KeyboardInterrupt("aborted")
-                if k == ord(" ") and len(ids):
-                    frames[cid] = frame.copy()
-                    break
+                if (k == ord(" ") or cid in frames) and len(ids):
+                    frames.setdefault(cid, []).append(frame.copy())
+                    if len(frames[cid]) >= n_frames:
+                        break
         finally:
             cap.release()
     cv2.destroyAllWindows()
@@ -207,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 frames[c] = cv2.imread(str(cand[0]))
         else:
             src = {c: str(c) for c in cams} | {int(s.split("=")[0]): s.split("=", 1)[1] for s in a.source}
-            frames = _capture_extrinsics_live(spec, src, (a.width, a.height))
+            frames = _capture_extrinsics_live(spec, src, (a.width, a.height), int(cfg["extrinsics"]["frames"]))
         run_extrinsics(spec, frames, root, cfg)
         return 0
     except (ValueError, RuntimeError, KeyboardInterrupt) as ex:

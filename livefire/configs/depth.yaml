@@ -4,7 +4,7 @@
 backend: da2_metric_small          # oracle | da2_metric_small | da2_relative_small
 model_cache_dir: data/models
 fp16_on_cuda: true                 # fp16 autocast of the network on CUDA; output is always float32
-input_size: 518                    # shorter image side fed to the network (multiple of 14); 0 = native
+input_size: 518                    # processor target size fed to the network (multiple of 14); 0 = keep the HF checkpoint's own processor default
 backends:
   da2_metric_small:
     hf_id: depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
@@ -22,6 +22,8 @@ anchor:
   min_pixels: 400                  # table pixels needed for a fit
   ransac_iters: 300
   inlier_thresh_rel: 0.03          # RANSAC inlier threshold, fraction of plane depth (metric) / of table disparity span
+  min_disparity_span_rel: 0.05     # disparity kind: table 1/z span (p95-p5)/mean below this -> shift ill-conditioned, DepthError
+  max_fit_points: 20000            # RANSAC subsample size; the final least-squares refit uses all inliers
   seed: 1234
   region:
     mode: board_footprint          # board_footprint | polygon_xy

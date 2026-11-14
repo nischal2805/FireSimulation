@@ -20,7 +20,7 @@ import numpy as np
 import yaml
 from numpy.typing import NDArray
 
-from livefire.calib.board import BoardSpec
+from livefire.calib.board import BoardSpec, CalibrationError
 from livefire.calib.extrinsics import ExtrinsicsResult
 from livefire.calib.intrinsics import IntrinsicsResult
 from livefire.common.config import load_yaml_text
@@ -28,10 +28,6 @@ from livefire.common.geometry import CameraCalibration
 
 DEFAULT_ROOT = Path("data") / "calib"
 _VER = re.compile(r"^calib_v(\d{3,})\.yaml$")
-
-
-class CalibrationError(ValueError):
-    """Calibration missing, malformed, or inconsistent with the frames it is applied to."""
 
 
 def _mat(a: NDArray) -> list:
@@ -174,7 +170,8 @@ def save_calibration(
     for cid, c in sorted(ext_by.items()):
         d = _intr_to_dict(intrinsics[cid])
         d["T_world_from_camera"] = _mat(c.T_world_from_camera)
-        d["extrinsics"] = {"reproj_rms_px": c.reproj_rms_px, "n_corners": c.n_corners, "flipped": c.flipped}
+        d["extrinsics"] = {"reproj_rms_px": c.reproj_rms_px, "n_corners": c.n_corners,
+                           "n_frames": c.n_frames, "spread_mm": c.spread_mm, "spread_deg": c.spread_deg}
         cams.append(d)
     created = time.strftime("%Y-%m-%dT%H:%M:%S")
     doc = {"calib_version": ver, "created": created, "board": spec.to_dict(), "world_frame": "P1R2: origin board centre, +Z toward cameras",

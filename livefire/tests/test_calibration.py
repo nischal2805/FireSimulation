@@ -122,7 +122,7 @@ def test_extrinsics_recover_pose(cam):
         T = poses[c.cam_id]
         assert np.linalg.norm(c.T_world_from_camera[:3, 3] - T[:3, 3]) < 0.002
         assert _rot_deg(c.T_world_from_camera[:3, :3], T[:3, :3]) < 0.2
-        assert c.reproj_rms_px < 0.5 and not c.flipped
+        assert c.reproj_rms_px < 0.5
     assert res.consistency_m[(0, 1)] < 0.002 and not res.warnings
 
 
@@ -202,6 +202,60 @@ def test_undistorted_image_matches_undistorted_K(cam):
     cal = CameraCalibration(0, *SIZE, Ku, np.zeros(5), T, 1)
     uv, _, _ = project(cal, board_corners_world(SPEC)[ids])
     assert len(ids) >= 20 and np.median(np.linalg.norm(uv - c, axis=1)) < 0.4
+
+
+def _projected_views(T_world_from_camera, n, sigma, seed):
+    """n noisy detections (all board corners projected through the true model + Gaussian pixel noise)."""
+    from livefire.calib.board import board_corners_board
+    ids = np.arange(len(board_corners_board(SPEC)), dtype=np.int32)
+    T_cb = np.linalg.inv(T_world_from_board(SPEC)) @ T_world_from_camera
+    T_cb = np.linalg.inv(T_cb)  # camera_from_board
+    rvec, _ = cv2.Rodrigues(T_cb[:3, :3])
+    px, _ = cv2.projectPoints(board_corners_board(SPEC), rvec, T_cb[:3, 3], K_TRUE, DIST_TRUE)
+    rng = np.random.default_rng(seed)
+    return [View(px.reshape(-1, 2) + rng.normal(0, sigma, (len(ids), 2)), ids) for _ in range(n)]
+
+
+def test_extrinsics_multiframe_average_beats_single_frame():
+    T = look_at([0.5, -0.4, 0.6], [0.0, 0.0, 0.0])
+    vs = _projected_views(T, 15, 1.5, seed=11)
+    intr = {0: _intr_truth(0)}
+    single = [estimate_extrinsics(SPEC, intr, {0: v}).cameras[0].T_world_from_camera for v in vs]
+    err1 = np.median([np.linalg.norm(S[:3, 3] - T[:3, 3]) for S in single])
+    res = estimate_extrinsics(SPEC, intr, {0: vs})
+    c = res.cameras[0]
+    err_avg = np.linalg.norm(c.T_world_from_camera[:3, 3] - T[:3, 3])
+    assert c.n_frames == 15 and err_avg < 0.6 * err1
+    assert _rot_deg(c.T_world_from_camera[:3, :3], T[:3, :3]) < np.median([_rot_deg(S[:3, :3], T[:3, :3]) for S in single])
+    assert 0.0 < c.spread_mm < 20.0 and 0.0 < c.spread_deg < 2.0   # spread reported and consistent with the noise
+    assert "pose spread" in res.summary()
+
+
+def test_extrinsics_rejects_outlier_frame():
+    T = look_at([0.5, -0.4, 0.6], [0.0, 0.0, 0.0])
+    vs = _projected_views(T, 9, 0.3, seed=2)
+    bad = View(vs[0].corners + np.random.default_rng(0).normal(0, 12.0, vs[0].corners.shape), vs[0].ids)
+    res = estimate_extrinsics(SPEC, {0: _intr_truth(0)}, {0: [*vs, bad]})
+    assert res.cameras[0].n_frames == 9 and any("rejected 1 of 10" in w for w in res.warnings)
+    assert np.linalg.norm(res.cameras[0].T_world_from_camera[:3, 3] - T[:3, 3]) < 0.003
+
+
+def test_extrinsics_camera_below_table_raises_clear_error():
+    from livefire.calib.board import CalibrationError
+    T = look_at([0.5, -0.4, -0.6], [0.0, 0.0, 0.0])          # camera under the table plane
+    v = _projected_views(T, 1, 0.2, seed=1)[0]
+    with pytest.raises(CalibrationError, match="wrong side"):
+        estimate_extrinsics(SPEC, {0: _intr_truth(0)}, {0: v})
+
+
+def test_pose_distance_unrelated_views_is_inf_and_never_still():
+    from livefire.calib.intrinsics import pose_distance
+    a = View(np.random.default_rng(0).uniform(0, 500, (12, 2)), np.arange(12, dtype=np.int32))
+    b = View(a.corners.copy(), np.arange(100, 112, dtype=np.int32))         # disjoint ids: unrelated pose
+    assert pose_distance(a, b, 1.0) == float("inf") and pose_distance(a, a, 1.0) == 0.0
+    gate = CaptureGate(SIZE, min_corners=12, still_px=1.5, still_frames=2, min_pose_diff=0.05)
+    out = [gate.update(v) for v in (a, b, a, b, a, b)]       # alternating unrelated poses are never "still"
+    assert all(o is None for o in out) and not gate.captured
 
 
 def test_capture_gate_and_coverage(views):

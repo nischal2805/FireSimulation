@@ -21,6 +21,7 @@ intrinsics:
 undistort:
   alpha: 0.0                  # getOptimalNewCameraMatrix alpha; 0 = every undistorted pixel valid (cropped)
 extrinsics:
+  frames: 15                  # board frames averaged per camera (static board; robust per-frame PnP, outliers rejected)
   min_corners: 8
   max_reproj_rms_px: 1.5      # warn above this
   max_consistency_m: 0.005    # warn if triangulated board corners differ from the layout by more (median)

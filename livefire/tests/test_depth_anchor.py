@@ -110,3 +110,85 @@ def test_anchored_backend_calib_version_mismatch():
     be = AnchoredDepthBackend(OracleDepthBackend(CAM), CAM, REGION, AnchorConfig())
     with pytest.raises(CalibVersionError):
         be.infer(_frame(calib_version=99))
+
+
+# ---- anchor guards (review batch D1/D2/D3)
+
+
+def test_non_positive_scale_rejected():
+    # disparity that grows with depth => negative scale a
+    d = np.where(MASK, -2.0 / np.where(MASK, PLANE_Z, 1.0) + 5.0, 0.0).astype(np.float32)
+    with pytest.raises(DepthError, match="non-positive scale"):
+        fit_anchor(d, np.ones_like(MASK), PLANE_Z, MASK, "disparity", AnchorConfig())
+
+
+def test_ill_conditioned_table_span_rejected_for_disparity():
+    # plane_z nearly constant over the table: scale and shift are not separable
+    zp = np.where(MASK, 1.5 + 1e-4 * np.arange(MASK.size).reshape(MASK.shape) / MASK.size, 0.0)
+    raw = np.where(MASK, 2.0 / np.where(MASK, zp, 1.0) + 0.3, 0.0).astype(np.float32)
+    with pytest.raises(DepthError, match="too little depth range"):
+        fit_anchor(raw, np.ones_like(MASK), zp, MASK, "disparity", AnchorConfig())
+
+
+def test_apply_anchor_masks_raw_below_shift():
+    from livefire.perception.depth import RawDepth, apply_anchor
+    from livefire.perception.depth.anchor import AnchorFit
+
+    fit = AnchorFit("disparity", 2.0, 0.5, 1.0, 10, 10, 0.0, 0.0, 0.0, 0.0)
+    vals = np.array([[0.2, 0.5, 0.6, 1.5]], np.float32)  # raw <= shift is invalid; raw - shift tiny is beyond z_max
+    z, valid = apply_anchor(RawDepth(vals, np.ones_like(vals, bool), "disparity", 1), fit, z_max_m=20.0)
+    assert valid.tolist() == [[False, False, True, True]]
+    assert z[0, 0] == 0.0 and z[0, 1] == 0.0 and z.dtype == np.float32
+    assert z[0, 2] == pytest.approx(2.0 / 0.1) and z[0, 3] == pytest.approx(2.0)
+
+
+def test_same_seed_ransac_is_repeatable_and_seed_matters_only_in_sampling():
+    rng = np.random.default_rng(4)
+    raw = _outliers(np.where(MASK, PLANE_Z / 1.3, 1.0).astype(np.float32), 0.3, rng, 0.05, 2.0).astype(np.float32)
+    ones = np.ones_like(MASK)
+    cfg = AnchorConfig(max_fit_points=3000)  # forces the seeded subsample path
+    f1 = fit_anchor(raw, ones, PLANE_Z, MASK, "metric", cfg)
+    f2 = fit_anchor(raw, ones, PLANE_Z, MASK, "metric", cfg)
+    assert f1 == f2
+    f3 = fit_anchor(raw, ones, PLANE_Z, MASK, "metric", AnchorConfig(max_fit_points=3000, seed=99))
+    assert f3.scale == pytest.approx(f1.scale, rel=0.01)
+
+
+def test_residual_stats_are_finite_when_disparity_denominator_is_non_positive():
+    # a few table pixels with raw below the fitted shift give z_est = inf; stats must still be finite
+    a, b = 2.5, 0.4
+    raw = np.where(MASK, a / np.where(MASK, PLANE_Z, 1.0) + b, 0.0).astype(np.float32)
+    idx = np.flatnonzero(MASK.ravel())[:200]
+    raw.ravel()[idx] = 0.1  # < shift
+    fit = fit_anchor(raw, np.ones_like(MASK), PLANE_Z, MASK, "disparity", AnchorConfig())
+    for v in (fit.resid_mae_m, fit.resid_rms_m, fit.resid_p95_m, fit.resid_mae_all_m):
+        assert np.isfinite(v)
+    assert fit.resid_mae_all_m > fit.resid_mae_m  # outliers count against the all-pixels metric only
+
+
+def test_yaml_anchor_config_exposes_all_fields():
+    from livefire.perception.depth.base import load_depth_config
+    cfg = AnchorConfig.from_yaml(load_depth_config())
+    assert cfg.min_disparity_span_rel == 0.05 and cfg.max_fit_points == 20000 and cfg.z_max_m == 20.0
+    assert TableRegion.from_config().polygon_xy.shape == (4, 2)
+
+
+def test_import_without_torch_or_transformers():
+    """`import livefire` and `livefire.perception.depth` must work when torch/transformers cannot be imported."""
+    import subprocess
+    import sys
+    code = (
+        "import sys, importlib.abc\n"
+        "class Block(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path, target=None):\n"
+        "        if name.split('.')[0] in ('torch', 'transformers'):\n"
+        "            raise ImportError('blocked: ' + name)\n"
+        "sys.meta_path.insert(0, Block())\n"
+        "import livefire, livefire.perception.depth\n"
+        "from livefire.perception.depth.hf_backends import depth_extra_available, create_depth_backend\n"
+        "assert not depth_extra_available()\n"
+        "assert not any(m.split('.')[0] in ('torch', 'transformers') for m in sys.modules)\n"
+        "print('ok')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr

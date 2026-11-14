@@ -19,6 +19,10 @@ from livefire.common.config import ConfigError, Params, load_yaml
 A4_LANDSCAPE_MM = (297.0, 210.0)
 
 
+class CalibrationError(ValueError):
+    """Calibration missing, malformed, or inconsistent with the frames it is applied to."""
+
+
 @dataclass(frozen=True)
 class BoardSpec:
     """Printed ChArUco board layout (metres)."""

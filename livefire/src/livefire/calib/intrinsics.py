@@ -146,10 +146,11 @@ def fit_intrinsics(
 def pose_distance(a: View, b: View, diag: float) -> float:
     """Image-space difference between two board views: mean displacement of the shared corners / image diagonal.
 
-    Fewer than 4 shared corner ids counts as a different pose (1.0)."""
+    Fewer than 4 shared corner ids means the poses are unrelated: returns ``inf`` ("different" for every threshold,
+    never "still")."""
     common, ia, ib = np.intersect1d(a.ids, b.ids, return_indices=True)
     if len(common) < 4:
-        return 1.0
+        return float("inf")
     return float(np.mean(np.linalg.norm(a.corners[ia] - b.corners[ib], axis=1)) / diag)
 
 

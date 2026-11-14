@@ -72,7 +72,8 @@ that were accepted):
 Synthetic table_v1 cam0 (1280x720, sanity only): oracle (MOCK) metric / disparity anchored MAE 0.6 mm / 3.3 mm
 (anchoring maths verified end to end); A strict rejected (inlier 0.48), lenient MAE 0.79 m; B strict MAE 0.85 m;
 table-region MAE 0.016 m (B) and 0.052 m (A, lenient). CPU latency 705-808 ms at 1280x720. Anchor fit time 20-60 ms.
-Valid coverage 0.97-1.00 everywhere (the networks produce dense output).
+Valid coverage is 0.97-1.00 in the per-sequence means (the networks produce dense output), but the per-frame minimum
+is **0.761** (B `da2_relative_small`, lenient, TUM frame `fr3_lo_393`; cause not investigated); source: the frames CSV.
 
 Interpretation: a single plane fixes global scale (and shift) well on the table itself (cm-level) but not the models'
 non-affine error elsewhere; MAE grows to 0.3-0.7 m on frames where the plane is a small part of a deep scene. Strict
@@ -107,3 +108,6 @@ two views (depth accumulation) to average errors. Hard limits: none triggered fo
 - `DepthBackend.infer` returns metric depth only for metric backends; relative backends need `AnchoredDepthBackend`.
 - To finalise: run `make depth-spike` on the RTX 4060 (`device: cuda:0`) with the user's clips in `data/clips`, tune
   `anchor.inlier_thresh_rel`/`min_inlier_ratio`, then confirm the license of A at its source.
+- **Open item (licence of A):** the metric-indoor fine-tune (candidate A) has no licence tag on its model card and its
+  Apache-2.0 status is only presumed from the upstream README; it stays unverified until confirmed at the source, and
+  must be resolved before A is relied on as the fallback (PRD 11.6 licence hard limit).

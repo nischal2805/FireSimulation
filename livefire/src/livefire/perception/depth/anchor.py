@@ -34,6 +34,11 @@ from livefire.perception.depth.base import (
 from livefire.perception.types import DepthResult
 
 
+def _val(x):
+    """Unwrap a PRD 8.1 ``{value, unit, range, status}`` entry; plain scalars pass through."""
+    return x["value"] if isinstance(x, dict) and "value" in x else x
+
+
 @dataclass(frozen=True)
 class AnchorConfig:
     """Anchor tunables (``configs/depth.yaml: anchor``)."""
@@ -56,8 +61,10 @@ class AnchorConfig:
             min_pixels=int(a["min_pixels"]),
             ransac_iters=int(a["ransac_iters"]),
             inlier_thresh_rel=float(a["inlier_thresh_rel"]),
-            z_max_m=float(a["z_max_m"]["value"]),
+            z_max_m=float(_val(a["z_max_m"])),
+            min_disparity_span_rel=float(_val(a["min_disparity_span_rel"])),
             seed=int(a["seed"]),
+            max_fit_points=int(_val(a["max_fit_points"])),
         )
 
 
@@ -86,7 +93,7 @@ class TableRegion:
         if r["mode"] == "polygon_xy":
             return cls(np.asarray(r["polygon_xy"], dtype=np.float64))
         if r["mode"] == "board_footprint":
-            return cls.from_footprint(tuple(r["board_half_extent_xy"]), float(r["margin_m"]["value"]))
+            return cls.from_footprint(tuple(r["board_half_extent_xy"]), float(_val(r["margin_m"])))
         raise DepthError(f"unknown anchor region mode {r['mode']!r}")
 
 
@@ -225,13 +232,13 @@ def fit_anchor(
     ratio = float(inl.sum()) / n
     if ratio < cfg.min_inlier_ratio:
         raise DepthError(f"anchor inlier ratio {ratio:.3f} below minimum {cfg.min_inlier_ratio:.3f}")
-    err = np.abs(z_est - zp_all)
+    err = np.minimum(np.abs(z_est - zp_all), 1e6)  # clip once: inf (denominator <= 0) must not reach any resid_* stat
     e_in = err[inl]
     return AnchorFit(
         kind=kind, scale=float(scale), shift=float(shift), inlier_ratio=ratio, n_pixels=n, n_inliers=int(inl.sum()),
         resid_mae_m=float(e_in.mean()), resid_rms_m=float(np.sqrt((e_in**2).mean())),
         resid_p95_m=float(np.percentile(e_in, 95)),
-        resid_mae_all_m=float(np.minimum(err, 1e6).mean()),
+        resid_mae_all_m=float(err.mean()),
     )  # fmt: skip
 
 

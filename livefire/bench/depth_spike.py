@@ -1,7 +1,7 @@
 """Depth backend spike (P1-004, ADR-0005; PRD 7.2, 11.6): accuracy, coverage, latency, VRAM -> Appendix C CSV.
 
 Usage: python bench/depth_spike.py [--device cpu|cuda:0] [--backends a,b] [--tum-dir DIR] [--tum-frames N]
-                                   [--clips DIR] [--out CSV]
+                                   [--clips DIR] [--calib-root DIR] [--out CSV]
 
 Datasets: (a) synthetic table_v1 render (sanity only, exact GT); (b) TUM RGB-D fr3/long_office_household
 (CC BY 4.0, https://cvg.cit.tum.de/data/datasets/rgbd-dataset), anchored on the dominant plane fitted to the GT depth
@@ -237,10 +237,15 @@ def synthetic_frames():
     return cam, [("table_v1_cam0", v.rgb, v.depth, v.valid, cam, region, float(m.mean()))]
 
 
-def clip_rows(backend, name, clips: Path, cfg_a: AnchorConfig, step: int = 15, max_frames: int = 10):
+def clip_rows(backend, name, clips: Path, cfg_a: AnchorConfig, step: int = 15, max_frames: int = 10,
+              calib_root: Path | None = None):
+    """Per-camera anchor rows for ``<clips>/cam<N>.mp4``: every ``step``-th frame, at most ``max_frames`` per camera.
+
+    Calibration = the store's active version (``active`` pointer, else newest) under ``calib_root``
+    (default ``<project>/data/calib``, independent of the working directory)."""
     from livefire.calib.store import load_calibration
 
-    cs = load_calibration(Path("data") / "calib")
+    cs = load_calibration(calib_root or ROOT / "data" / "calib")
     region = TableRegion.from_config()
     rows = []
     for cam_id, rec in cs.cameras.items():
@@ -252,7 +257,8 @@ def clip_rows(backend, name, clips: Path, cfg_a: AnchorConfig, step: int = 15, m
         i = 0
         plane_z, mask = table_plane_depth(cal, region)
         first = True
-        while len(rows) < max_frames * len(cs.cameras):
+        n_cam = 0
+        while n_cam < max_frames:
             ok, bgr = cap.read()
             if not ok:
                 break
@@ -275,6 +281,8 @@ def clip_rows(backend, name, clips: Path, cfg_a: AnchorConfig, step: int = 15, m
             except DepthError as e:
                 row["status"] = f"rejected: {e}"
             rows.append(row)
+            n_cam += 1
+        cap.release()
     return rows
 
 
@@ -285,6 +293,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--tum-dir", default=str(ROOT / "data" / "datasets" / "tum_fr3_long_office"))
     ap.add_argument("--tum-frames", type=int, default=10)
     ap.add_argument("--clips", default=str(ROOT / "data" / "clips"))
+    ap.add_argument("--calib-root", default=str(ROOT / "data" / "calib"), help="calibration store for the clips (active version)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
     device = args.device or str(load_yaml("app")["device"])
@@ -332,7 +341,7 @@ def main(argv: list[str] | None = None) -> None:
         clips = Path(args.clips)
         if clips.is_dir() and any(clips.glob("cam*.mp4")):
             try:
-                rows = clip_rows(be, name, clips, cfg_a)
+                rows = clip_rows(be, name, clips, cfg_a, calib_root=Path(args.calib_root))
                 all_rows += rows
                 to_csv_row(rec, rows, "user_clips", "native", kind, "no ground truth: coverage/anchor residual only; " + extra)
             except Exception as e:  # noqa: BLE001

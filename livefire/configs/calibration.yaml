@@ -1,0 +1,26 @@
+# ChArUco calibration (P1-003). Edit square_length_m after MEASURING the printed board with a ruler;
+# the marker length scales by the same factor (marker_to_square_ratio is fixed by the printed layout).
+board:
+  squares_x: 7                # squares along the board X axis (A4 landscape)
+  squares_y: 5
+  dictionary: DICT_5X5_100
+  square_length_m: {value: 0.035, unit: "m", range: [0.01, 0.2], status: physical_estimate}   # MEASURE the print
+  marker_to_square_ratio: {value: 0.742857142857, unit: "1", range: [0.3, 0.95], status: physical_estimate}  # 0.026/0.035
+intrinsics:
+  min_views: 20               # total accepted views (fit + held-out) required
+  holdout_fraction: 0.2       # fraction of views never used for the fit
+  min_corners: 12             # ChArUco corners required for a view to count (of 24)
+  fix_k3: true                # distortion model k1,k2,p1,p2 (k3 fixed at 0): stable for 20-40 views
+  target_rms_px: 1.0          # PRD 7.1: held-out RMS target
+  seed: 1234                  # holdout split seed
+  capture:
+    still_px: 1.5             # board counts as still when mean corner motion < this many px between frames
+    still_frames: 6
+    min_pose_diff: 0.08       # normalised pose difference to the previous captures (see intrinsics.pose_distance)
+    grid: [8, 6]              # coverage heat-map cells (x, y)
+undistort:
+  alpha: 0.0                  # getOptimalNewCameraMatrix alpha; 0 = every undistorted pixel valid (cropped)
+extrinsics:
+  min_corners: 8
+  max_reproj_rms_px: 1.5      # warn above this
+  max_consistency_m: 0.005    # warn if triangulated board corners differ from the layout by more (median)

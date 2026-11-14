@@ -1,0 +1,26 @@
+# Scene acquisition (P1-005; PRD 6.1, 7.2, P1R3, P1R4). Frames -> anchored depth -> median accumulation -> TSDF fusion
+# -> surface extraction -> table plane + object clustering -> SceneSnapshot.
+acquisition:
+  seconds: {value: 5.0, unit: "s", range: [0.5, 30.0], status: artistic}     # acquisition window length per camera
+  max_frames: 30            # frames kept per camera inside the window (evenly spaced in time); depth inference per frame is the cost
+  min_frames: 3             # fewer usable frames than this per camera raises AcquisitionError
+  min_confidence: {value: 0.5, unit: "-", range: [0.0, 1.0], status: artistic}   # accumulated pixels below this agreement fraction are invalid
+  agree_tol_rel: {value: 0.02, unit: "-", range: [0.001, 0.2], status: artistic}  # frame agrees with the median within this fraction of depth
+  fusion_roi:
+    min: [-0.8, -0.6, -0.05]   # m, world frame
+    max: [0.8, 0.6, 0.6]       # m, world frame
+  voxel_size: {value: 0.01, unit: "m", range: [0.002, 0.05], status: artistic}
+  truncation_voxels: 3         # TSDF truncation distance in voxels
+  max_depth_m: {value: 6.0, unit: "m", range: [0.5, 20.0], status: artistic}     # measured depth beyond this is not fused
+  plane:
+    plane_tol_m: {value: 0.01, unit: "m", range: [0.001, 0.05], status: physical_estimate}  # fitted table plane must agree with z = 0 within this
+    inlier_m: {value: 0.008, unit: "m", range: [0.001, 0.03], status: artistic}   # points within this of the plane (and facing up) are table
+    min_normal_z: 0.8          # plane inliers need |n_z| of the element normal >= this
+    ransac_iters: 200
+    seed: 1234
+  cluster:
+    radius_factor: 1.5         # connect points closer than radius_factor * surfel_spacing (same rule as neighbours)
+    min_object_area_m2: {value: 0.001, unit: "m^2", range: [0.0001, 0.1], status: artistic}   # smaller components are dropped as noise
+  default_object_material: paper     # untagged objects (requires_review=True, HUD) so click-to-ignite works out of the box
+  default_object_confidence: 0.3
+  min_view_observations: 20    # surfels visible in a camera needed to list it as an observation of an object

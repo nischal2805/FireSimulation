@@ -16,7 +16,7 @@ from livefire.common.geometry import AABB, CameraCalibration, VoxelGrid
 from livefire.perception.material.types import MATERIAL_CLASSES, MaterialPrediction
 from livefire.scene.snapshot import ObjectRegistry, SceneSnapshot, WorldObject
 from livefire.scene.splat import view_occlusion
-from livefire.scene.surfels import bin_surfels, build_neighbors, view_points
+from livefire.scene.surfels import Surfels, bin_surfels, build_neighbors, view_points
 from livefire.sim.materials import MaterialTable
 
 THICK_DELTA = 1e-3  # m; objects with delta >= this are obstacles
@@ -49,6 +49,27 @@ def build_snapshot(
     material_table: MaterialTable | None = None,
 ) -> SceneSnapshot:
     """Build a ``SceneSnapshot`` from per-camera views and ``obj_id -> MaterialPrediction``."""
+    roi = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
+    s = float(grid_cfg["surfel_spacing"])
+    vps = [view_points(v.calib, v.depth, v.valid, v.obj_id, roi) for v in views.values()]
+    sf = bin_surfels(vps, roi, s)
+    return snapshot_from_surfels(sf, views, materials, grid_cfg, version, names, material_table)
+
+
+def snapshot_from_surfels(
+    sf: Surfels,
+    views: dict[int, ViewInput],
+    materials: dict[int, MaterialPrediction],
+    grid_cfg: dict[str, Any],
+    version: int = 1,
+    names: dict[int, str] | None = None,
+    material_table: MaterialTable | None = None,
+    observations: dict[int, dict[int, int]] | None = None,
+) -> SceneSnapshot:
+    """Assemble a ``SceneSnapshot`` from already-binned ``Surfels`` (world frame, metres) and the per-camera
+    measured views used for the occlusion depth (``views[c].depth/valid`` are the measured depth, e.g. the accumulated
+    acquisition depth; ``obj_id``/``rgb`` are unused here). ``observations`` maps obj_id -> {cam_id: per-camera id}
+    (default: every camera observes every object under the same id)."""
     table = material_table or MaterialTable.load()
     roi = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
     G = int(grid_cfg["G"])
@@ -58,9 +79,6 @@ def build_snapshot(
     versions = {c.calib_version for c in cams.values()}
     if len(versions) != 1:
         raise ValueError(f"cameras disagree on calib_version: {versions}")
-
-    vps = [view_points(v.calib, v.depth, v.valid, v.obj_id, roi) for v in views.values()]
-    sf = bin_surfels(vps, roi, s)
     n = len(sf.pos)
     unknown = sorted(set(np.unique(sf.obj_id).tolist()) - set(materials))
     if unknown:
@@ -91,8 +109,8 @@ def build_snapshot(
 
     reg = ObjectRegistry()
     for o in sorted(materials):
-        reg.add(WorldObject(o, (names or {}).get(o, f"object_{o}"), materials[o],
-                            {cid: o for cid in views}))  # fmt: skip
+        obs = observations.get(o, {}) if observations is not None else {cid: o for cid in views}
+        reg.add(WorldObject(o, (names or {}).get(o, f"object_{o}"), materials[o], obs))
     return SceneSnapshot(
         version=version, calib_version=versions.pop(), roi=roi, h_gas=float(grid.h), cameras=cams,
         pos=sf.pos, normal=sf.normal, area=sf.area, obj_id=sf.obj_id, material_id=mat_id,

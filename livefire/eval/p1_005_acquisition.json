@@ -1,0 +1,93 @@
+{
+ "label": "CPU, warp-cpu, oracle+noise MOCK",
+ "cameras": {
+  "0": {
+   "frames": 30,
+   "valid_fraction": 1.0,
+   "mean_conf": 0.9535912871360779,
+   "anchor_scale_median": 0.9723881883205217,
+   "anchor_scale_spread": 0.00023722117200009052
+  },
+  "1": {
+   "frames": 30,
+   "valid_fraction": 1.0,
+   "mean_conf": 0.9536439180374146,
+   "anchor_scale_median": 1.0329330542706225,
+   "anchor_scale_spread": 0.00020010184803709308
+  }
+ },
+ "warnings": [],
+ "voxel_size_m": 0.01,
+ "tsdf_shape": [
+  160,
+  120,
+  65
+ ],
+ "device": "cpu",
+ "n_samples": 18242,
+ "n_dropped_samples": 75,
+ "n_elements": 7926,
+ "plane": {
+  "z_dev_mm": 1.458218080188664,
+  "tilt_deg": 0.024312955614474857,
+  "agrees": true,
+  "n_inliers": 15732
+ },
+ "objects": {
+  "0": {
+   "name": "table",
+   "elements": 7362,
+   "area_m2": 1.4831562042236328,
+   "cameras": [
+    0,
+    1
+   ],
+   "material": "other_nonflammable",
+   "requires_review": false
+  },
+  "1": {
+   "name": "object_1",
+   "elements": 248,
+   "area_m2": 0.053346145898103714,
+   "cameras": [
+    0,
+    1
+   ],
+   "material": "paper",
+   "requires_review": true
+  },
+  "2": {
+   "name": "object_2",
+   "elements": 197,
+   "area_m2": 0.044503845274448395,
+   "cameras": [
+    0,
+    1
+   ],
+   "material": "paper",
+   "requires_review": true
+  },
+  "3": {
+   "name": "object_3",
+   "elements": 119,
+   "area_m2": 0.023485586047172546,
+   "cameras": [
+    1
+   ],
+   "material": "paper",
+   "requires_review": true
+  }
+ },
+ "timings_ms": {
+  "capture": 4865.993279000122,
+  "depth": 2643.6986790004084,
+  "accumulate": 592.3281979999047,
+  "tsdf": 117.35000799990303,
+  "extract": 121.21345600007771,
+  "objects": 25.043057999937446,
+  "snapshot": 973.6223909999353,
+  "total": 9350.131274999967
+ },
+ "acquisition_s": 9.350131274999967,
+ "geometry_p95_mm": 2.9262335225939684
+}

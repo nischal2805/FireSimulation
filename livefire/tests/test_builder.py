@@ -32,14 +32,12 @@ def built():
 def test_elements_on_surface(built):
     scene, _, _, snap = built
     s = snap.surfel_spacing
-    dists = []
     for o in OBJ:
         m = snap.obj_id == o
         assert m.sum() > 0, f"object {o} has no elements"
         d = scene.distance_to_object(o, snap.pos[m].astype(np.float64))
         assert d.max() <= s, (o, d.max())
-        dists.append(d)
-    assert np.percentile(np.concatenate(dists), 95) <= 0.5 * s
+        assert np.percentile(d, 95) <= 0.5 * s, (o, np.percentile(d, 95))
 
 
 def _visible_area(scene, cams, rv, o, n=400_000):
@@ -71,7 +69,7 @@ def test_neighbors(built):
     snap = built[3]
     nb = snap.neighbors
     n = len(snap.pos)
-    assert nb.shape[1] == 16
+    assert nb.shape[1] == load_yaml("grid")["neighbor_k_max"]
     ii = np.repeat(np.arange(n), nb.shape[1]).reshape(nb.shape)
     m = nb >= 0
     assert (nb[m] != ii[m]).all()
@@ -97,8 +95,6 @@ def test_materials(built):
 def test_view_depth_and_holes(built):
     _, _, rv, snap = built
     for cid, r in rv.items():
-
-
         obj = (r.obj_id >= 0) & r.valid
         # "no edge": all pixels in a 5x5 window have the same obj id and a small depth range
         inner = binary_erosion(obj, np.ones((5, 5), bool))
@@ -155,7 +151,9 @@ def test_obstacles(built):
 def test_snapshot_meta(built):
     snap = built[3]
     assert snap.calib_version == 1
-    for a in (snap.pos, snap.normal, snap.area, snap.neighbors, snap.solid_mask, snap.view_depth[0]):
-        assert not a.flags.writeable
+    arrays = [snap.pos, snap.normal, snap.area, snap.obj_id, snap.material_id, snap.material_conf,
+              snap.neighbors, snap.solid_mask, snap.solid_fraction,
+              *snap.view_depth.values(), *snap.view_hole_mask.values()]  # fmt: skip
+    assert all(not a.flags.writeable for a in arrays)
     assert np.allclose(np.linalg.norm(snap.normal, axis=1), 1.0, atol=1e-5)
     assert (snap.area > 0).all() and (snap.area <= 2 * snap.surfel_spacing**2 + 1e-9).all()

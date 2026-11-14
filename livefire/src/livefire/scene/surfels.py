@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.ndimage import distance_transform_edt
 from scipy.spatial import cKDTree
 
 from livefire.common.geometry import AABB, CameraCalibration, backproject_depth
@@ -24,6 +25,7 @@ class ViewPoints:
     normal: F64  # (M,3) unit, oriented to the camera
     obj_id: NDArray[np.int32]  # (M,)
     footprint: F64  # (M,) pixel footprint area on the surface, m^2
+    has_normal: NDArray[np.bool_]  # (M,) normal computed at this pixel (ok mask)
 
 
 def normals_from_depth(
@@ -63,21 +65,40 @@ def normals_from_depth(
     return P, N, ok
 
 
+def _nearest_ok_normals(N: F64, ok: NDArray[np.bool_], oid: NDArray, want: NDArray[np.bool_]) -> F64:
+    """For pixels in ``want``, the normal of the nearest ``ok`` pixel of the same obj_id
+    (zeros if that object has no ok pixel in the view)."""
+    out = np.zeros(N.shape)
+    for o in np.unique(oid[want]):
+        good = ok & (oid == o)
+        sel = want & (oid == o)
+        if not good.any():
+            continue
+        _, (iy, ix) = distance_transform_edt(~good, return_indices=True)
+        out[sel] = N[iy[sel], ix[sel]]
+    return out
+
+
 def view_points(
     calib: CameraCalibration, depth: NDArray, valid: NDArray, obj_id: NDArray, roi: AABB
 ) -> ViewPoints:
-    """Accepted pixels (ok normal, obj_id >= 0, inside the ROI) as world samples with footprints."""
+    """All valid, in-ROI pixels with obj_id >= 0 as world samples with footprints. The ``ok``
+    mask (depth jump / obj change / neighbourhood) gates only the normals: non-ok pixels borrow
+    the normal of the nearest ok pixel of the same object for the cos term, and are flagged
+    ``has_normal=False`` so they do not contribute to the element normal."""
     P, N, ok = normals_from_depth(calib, depth, valid, obj_id)
-    m = ok & (np.asarray(obj_id) >= 0)
+    oid_img = np.asarray(obj_id)
+    m = np.asarray(valid, dtype=bool) & (oid_img >= 0)
+    m &= roi.contains(P.reshape(-1, 3)).reshape(m.shape)
+    N = np.where(ok[..., None], N, _nearest_ok_normals(N, ok, oid_img, m & ~ok))
+    m &= np.linalg.norm(N, axis=-1) > 0.5
     p, n = P[m], N[m]
-    m2 = roi.contains(p)
-    p, n = p[m2], n[m2]
-    oid = np.asarray(obj_id)[m][m2].astype(np.int32)
-    z = np.asarray(depth, dtype=np.float64)[m][m2]
+    oid = oid_img[m].astype(np.int32)
+    z = np.asarray(depth, dtype=np.float64)[m]
     v = calib.center_world - p
     cos = np.abs(np.einsum("ij,ij->i", n, v)) / np.linalg.norm(v, axis=1)
     fp = (z / calib.K[0, 0]) * (z / calib.K[1, 1]) / np.maximum(cos, MIN_COS)
-    return ViewPoints(p, n, oid, fp)
+    return ViewPoints(p, n, oid, fp, ok[m])
 
 
 @dataclass(frozen=True)
@@ -92,7 +113,8 @@ def bin_surfels(views: list[ViewPoints], roi: AABB, spacing: float, min_points: 
     """Pool views into bins keyed ``(obj_id, floor((p - roi_min)/s))``. ``area`` is the max over
     views of the summed pixel footprints in the bin, capped at ``2 s^2``."""
     pos = np.concatenate([v.pos for v in views])
-    nrm = np.concatenate([v.normal for v in views])
+    hn = np.concatenate([v.has_normal for v in views])
+    nrm = np.concatenate([v.normal for v in views]) * hn[:, None]
     oid = np.concatenate([v.obj_id for v in views])
     cell = np.floor((pos - roi.min) / spacing).astype(np.int64)
     base = int(np.ceil(roi.size.max() / spacing)) + 2
@@ -113,7 +135,7 @@ def bin_surfels(views: list[ViewPoints], roi: AABB, spacing: float, min_points: 
     area = np.minimum(area, 2.0 * spacing**2)
     out_oid = np.zeros(nb, dtype=np.int32)
     out_oid[inv] = oid
-    keep = (cnt >= min_points) & (nl > 1e-9)
+    keep = (cnt >= min_points) & (np.bincount(inv, hn, nb) >= 1)  # >= 1 ok-normal pixel
     return Surfels(
         out_pos[keep].astype(np.float32),
         out_n[keep].astype(np.float32),

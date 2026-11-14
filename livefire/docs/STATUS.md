@@ -2,27 +2,25 @@
 
 | Field | Value |
 | --- | --- |
-| Phase | P0 (contracts and synthetic vertical slice), in progress |
-| Last passing commit | P0-010 (see git log) |
-| Gate 0 | not started |
+| Phase | P0 complete in code; Gate 0 awaiting the user's GPU run and approval |
+| Last passing commit | 63829e8 (`make test`: 163 passed, 3 slow deselected; CPU) |
+| Gate 0 | recommended PASSED_WITH_APPROVED_DEVIATION, pending items in `docs/reports/phase-0.md` |
 
 ## Completed tasks
-- P0-001..P0-009 (skeleton/config/timers, geometry, contracts/materials, GPU spike, synthetic scene, snapshot builder, surface fire model, gas solver and coupled sim, volume renderer and compositor)
-- P0-008b: combustion-intensity field for visible flames (ADR-0004)
-- P0-013: literature review (search-only)
-- P0-010: app lifecycle, scheduler, HUD, record and replay (`make run` -> `out/demo/composite.mp4`, offline mode on CPU)
+- P0-001 .. P0-013 and P0-008b (see `docs/tasks/`), final whole-branch review and fix wave
+- Gate 0 report: `docs/reports/phase-0.md`
 
 ## In progress
 - none
 
 ## Blockers
-- No GPU in the development container (`nvidia-smi` not found); GPU numbers need a run on the RTX 4060 machine. CPU runs are labelled `gpu=none, framework=warp-cpu` and are far below real time.
-- GitHub push returns 403 (commits stay local).
-- Literature full-text fetch is blocked (search-only summaries).
+- No GPU in the development container. GPU validation (`make test-slow`, `make bench-spike`, `make bench` with
+  `device: "cuda:0"`) must run on the user's RTX 4060 (Windows 11).
+- Literature full-text fetch blocked (search-only citations).
 
 ## Active ADRs
-- ADR-0001 (proposed): GPU framework; pending `make bench-spike` with device cuda:0 on the RTX 4060
-- ADR-0002, ADR-0003, ADR-0004
+- ADR-0001 (proposed): Warp primary, Taichi fallback; decided by the 4060 spike run
+- ADR-0002 MAC grid, ADR-0003 energy split, ADR-0004 combustion-intensity field
 
 ## Next task
-- P0-011
+- User: GPU run and Gate 0 approval. Then P1 task planning (live cameras, calibration, depth, click-to-ignite).

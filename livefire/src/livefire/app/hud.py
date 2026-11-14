@@ -42,6 +42,7 @@ class HudInfo:
     hole_frac: dict[int, float]
     n_elements: int
     offline: bool
+    extra: tuple[str, ...] = ()  # additional lines (interactive viewer: selection, material, radius, message)
 
 
 def hud_lines(h: HudInfo) -> list[str]:
@@ -55,7 +56,7 @@ def hud_lines(h: HudInfo) -> list[str]:
         f"{deg}   holes {holes}   elements {h.n_elements}",
         "SYNTHETIC SCENE" + ("   OFFLINE (not real-time)" if h.offline else ""),
     ]
-    return lines
+    return lines + list(h.extra)
 
 
 def draw_hud(img_rgb: NDArray[np.uint8], h: HudInfo) -> NDArray[np.uint8]:

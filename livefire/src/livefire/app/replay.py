@@ -9,7 +9,7 @@ arrays are compared with ``np.allclose(rtol=GPU_RTOL, atol=GPU_ATOL)`` against `
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +48,8 @@ def compare_states(expected_npz: Path, actual: Any, rtol: float = GPU_RTOL, atol
 class Event:
     """A scripted event. ``t`` is the requested sim time [s]; ``step`` the sim step index at which it was
     applied (set when recorded; -1 before). ignite: ``point`` world (x,y,z) m, ``radius`` m.
-    override: ``obj_id`` and ``material`` name."""
+    override: ``obj_id`` and ``material`` name. Interactive clicks (P1R5) are ignite events that also carry
+    ``cam``, ``u``, ``v`` (the click pixel); replay only uses ``point`` and ``radius``."""
 
     kind: str  # "ignite" | "override"
     t: float
@@ -58,6 +59,9 @@ class Event:
     obj_id: int | None = None
     material: str | None = None
     n_lit: int | None = None  # result, informational
+    cam: int | None = None  # interactive click: camera id, full-resolution pixel (u, v) (informational; point rules)
+    u: float | None = None
+    v: float | None = None
 
 
 def parse_ignite(spec: str) -> Event:
@@ -90,11 +94,11 @@ def apply_event(sim: FireSimulation, ev: Event, default_radius: float) -> Event:
         assert ev.point is not None
         r = ev.radius if ev.radius is not None else default_radius
         n = sim.ignite(np.asarray(ev.point, float), r)
-        return Event("ignite", ev.t, sim.step_count, ev.point, r, None, None, n)
+        return replace(ev, step=sim.step_count, radius=r, n_lit=n)
     if ev.kind == "override":
         assert ev.obj_id is not None and ev.material is not None
         sim.set_material(ev.obj_id, MATERIAL_CLASSES.index(ev.material))
-        return Event("override", ev.t, sim.step_count, None, None, ev.obj_id, ev.material)
+        return replace(ev, step=sim.step_count)
     raise ValueError(f"unknown event kind {ev.kind!r}")
 
 

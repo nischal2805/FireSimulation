@@ -28,7 +28,9 @@ Run tools through `uv run` (the make targets do this for you).
 | `make bench` | benchmark harness, writes CSVs to `bench/results/` |
 | `make bench-spike` | framework spike kernels benchmark |
 | `make plots` | plots generated from the CSVs in `bench/results/` |
-| `make calibrate`, `make eval` | placeholders, not implemented until P1 |
+| `make calibrate CALIB_ARGS="..."` | calibration tool (see Calibration below), default prints the board |
+| `make interactive` | interactive viewer on the synthetic scene (click to ignite) |
+| `make eval` | placeholder, not implemented until P1 |
 
 ## Windows (no make)
 
@@ -49,6 +51,10 @@ path shells out to bash; paths use `pathlib`.
 | `make capture` | `uv run python -m livefire.app capture` |
 | `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` |
 | `make latency-timer` | `uv run python -m livefire.app latency-timer` |
+| `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` |
+| `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` (print-ready board, A4 landscape, print at 100 %) |
+| | `uv run python -m livefire.app calib intrinsics --cam 0` (and `--cam 1`; `--from-dir DIR` for saved images): per-camera intrinsics |
+| | `uv run python -m livefire.app calib extrinsics --cams 0,1` (`--from-dir DIR` with cam0.png, cam1.png): world poses, writes calib_vNNN |
 
 Replay a recorded run: `uv run python -m livefire.app replay out/demo` (on a GPU device the final state is compared
 with a tolerance, see ADR-0002).
@@ -72,6 +78,22 @@ Glass-to-glass latency (PRD 5.5), per camera:
 3. Take a screenshot: the camera feed shows an old counter value, the "live timer" panel shows the current one.
    Glass-to-glass latency = live value minus the value seen in the feed (repeat a few times; report the median;
    it includes monitor refresh and capture latency, so it is an upper bound, resolution about one monitor frame).
+
+## Calibration (P1)
+
+1. `calib board`: print `board.png` at 100 % scale on A4 landscape, mount flat. MEASURE one square with a ruler; set `board.square_length_m` in `configs/calibration.yaml` (marker length scales automatically).
+2. Per camera: `calib intrinsics --cam N`. Move the board through the whole image with varied tilt; auto-capture fires when the board is still and the pose is new; the heat-map shows uncovered regions; press `s` to force a capture, `f` to finish (>= 20 views). Read the HELD-OUT RMS line (target < 1 px).
+3. Lay the board flat on the table, visible to all cameras, not moving. `calib extrinsics --cams 0,1`, SPACE per camera. World origin = board centre, +Z up toward the cameras; table plane z = 0. Check the reported reprojection RMS and consistency (mm).
+4. Result is `data/calib/calib_vNNN.yaml`, set active. Changing camera resolution requires recalibration (mismatch raises).
+
+## Interactive viewer (P1)
+
+`python -m livefire.app interactive --scene table_v1` opens the two composited views (synthetic scene, so you can
+try it before cameras are calibrated). Mouse: left click ignites at the clicked surface point (holes and
+non-flammable objects only show a message), right click selects an object. Keys: `1`..`8` set the selected object's
+material (paper, cloth, wood, plastic, metal, glass, ceramic, other_nonflammable), `space` pause/resume, `+`/`-`
+ignition radius, `o` geometry overlay, `v` single/dual view, `r` re-acquire request, `s` screenshot, `q` quit. Use
+`--out DIR` to record the session (events.jsonl with every click and override, replayable with `replay DIR`).
 
 ## CPU-only note
 

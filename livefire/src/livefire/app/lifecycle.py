@@ -28,7 +28,7 @@ ALLOWED: dict[State, frozenset[State]] = {
     S.ACQUIRING: frozenset({S.READY, S.ERROR}),
     S.READY: frozenset({S.SIMULATING, S.ERROR}),
     S.SIMULATING: frozenset({S.PAUSED, S.ERROR}),
-    S.PAUSED: frozenset({S.SIMULATING, S.ERROR}),
+    S.PAUSED: frozenset({S.SIMULATING, S.ACQUIRING, S.ERROR}),  # PAUSED -> ACQUIRING: user re-acquire request
     S.ERROR: frozenset({S.UNINITIALIZED}),
 }
 

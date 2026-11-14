@@ -1,4 +1,4 @@
-.PHONY: capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -31,11 +31,17 @@ bench-spike:
 plots:
 	uv run python bench/plots.py
 
+# e.g. make calibrate CALIB_ARGS="intrinsics --cam 0"   or   CALIB_ARGS="extrinsics --cams 0,1"
+CALIB_ARGS ?= board --out board.png --dpi 300
 calibrate:
-	@echo "not implemented until P1"; exit 2
+	uv run python -m livefire.app calib $(CALIB_ARGS)
 
 eval:
 	@echo "not implemented until P1"; exit 2
+
+# Interactive viewer on the synthetic scene: left click ignites, right click selects, keys 1-8 set material, q quits
+interactive:
+	uv run python -m livefire.app interactive --scene table_v1
 
 # Live cameras (configs/cameras.yaml): window with both feeds, fps/age/skew overlays; q or Esc quits
 capture:

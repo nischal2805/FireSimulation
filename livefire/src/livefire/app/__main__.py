@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "calib":  # calibration tool has its own sub-parser
+        from livefire.app.calib_cli import main as calib_main
+
+        return calib_main(raw[1:])
     ap = argparse.ArgumentParser(prog="livefire.app", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the synthetic scene and record a composite video")
@@ -25,10 +30,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tolerance", action="store_true",
                    help="compare final arrays with rtol=1e-5 atol=1e-6 instead of the exact digest (default on GPU)")
     p.add_argument("--render", action="store_true", help="also render the final two views to PNG")
+    i = sub.add_parser("interactive", help="interactive viewer: click to ignite (synthetic scene)")
+    i.add_argument("--scene", default="table_v1")
+    i.add_argument("--grid", type=int, default=None, help="gas grid G override (default: configs/grid.yaml)")
+    i.add_argument("--out", default=None, help="record the session (events, config, digest) to this directory")
+    i.add_argument("--max-width", type=int, default=1600, help="window width limit in pixels")
+    i.add_argument("--max-height", type=int, default=900, help="window height limit in pixels")
+    i.add_argument("--frames", type=int, default=None, help="exit after N frames (smoke testing)")
     from livefire.app.capture_cli import add_subparsers, run_command
 
     add_subparsers(sub)
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = raw
     for i in range(len(argv) - 1, 0, -1):  # "--ignite -0.075,..." would be read as a flag: glue to "--ignite=..."
         if argv[i - 1] in ("--ignite", "--override"):
             argv[i - 1 : i + 1] = [f"{argv[i - 1]}={argv[i]}"]
@@ -36,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd in ("capture", "latency-timer"):
         return run_command(a)
+    if a.cmd == "interactive":
+        from livefire.app.window import run_interactive
+
+        return run_interactive(a.scene, a.grid, Path(a.out) if a.out else None, a.max_width, a.max_height, a.frames)
 
     from livefire.app.replay import parse_ignite, parse_override, replay
     from livefire.app.runner import RunConfig, Runner

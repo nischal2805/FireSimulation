@@ -9,6 +9,7 @@
 ## Completed tasks
 - Setup: repo folder, CLAUDE.md, AGENTS.md, docs/PRD.md, docs/STATUS.md, docs/{decisions,tasks,reports}/
 - P0-001: repo skeleton, uv env, config loader, timers, logger (14 tests, ruff clean)
+- P0-002: geometry module (cameras, transforms, depth, AABB, VoxelGrid) + 12 tests (26 total, ruff clean)
 
 ## In progress
 - none
@@ -20,4 +21,4 @@
 - none
 
 ## Next task
-- P0-002
+- P0-003

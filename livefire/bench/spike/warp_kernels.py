@@ -151,6 +151,13 @@ def init(device: str, cold_cache_dir: str | None = None) -> None:
         wp.get_device(device)  # raises if absent
 
 
+def peak_vram_mb(device: str) -> float | None:
+    """Warp mempool high-water mark in MB on CUDA (process-cumulative, not reset per case); None on CPU."""
+    if device == "cpu" or not wp.get_device(device).is_cuda:
+        return None
+    return wp.get_mempool_used_mem_high(device) / 1e6
+
+
 def version() -> str:
     """Installed warp-lang version."""
     return wp.config.version

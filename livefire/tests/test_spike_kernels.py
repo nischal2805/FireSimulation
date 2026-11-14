@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "spike"))
 
-import common
 import numpy_ref
+import spike_common as common
 
 ADV_CASES = [(1 / 60, 3.0 / 32), (0.5, 3.0 / 32)]  # second case: displacements of several cells, hits clamping
 
@@ -108,3 +108,14 @@ def test_csv_columns_verbatim():
     prd = (Path(__file__).resolve().parents[1] / "docs" / "PRD.md").read_text()
     line = next(ln for ln in prd.splitlines() if ln.startswith("`run_id, date"))
     assert common.COLUMNS == [c.strip() for c in line.strip("`").split(",")]
+
+
+def test_taichi_kernel_accepts_numpy_directly():
+    pytest.importorskip("taichi")
+    import taichi_kernels as tk
+
+    tk.init("cpu")
+    s, v = common.make_advect_inputs(32, 1234)
+    out = np.zeros_like(s)
+    tk.advect_kernel(s, v, out, 1 / 60, 3.0 / 32, 32)
+    assert np.max(np.abs(out - numpy_ref.advect(s, v, 1 / 60, 3.0 / 32))) < 1e-4

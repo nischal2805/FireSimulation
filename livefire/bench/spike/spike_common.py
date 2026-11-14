@@ -111,17 +111,27 @@ def git_sha() -> str:
 
 
 def gpu_info(device: str) -> dict[str, str]:
-    """gpu/driver/cuda/power_mode strings; `none` fields on CPU, nvidia-smi values on CUDA (else unknown)."""
+    """gpu/driver/cuda/power_mode/clock strings.
+
+    CPU: gpu/driver/cuda `none`, power_mode `unknown`. CUDA: nvidia-smi values (power_mode combines power
+    management, power limit and pstate; `clocks` holds current and max SM clock), `unknown` where unavailable.
+    """
     if device == "cpu":
-        return {"gpu": "none", "driver": "none", "cuda": "none", "power_mode": "n/a (cpu)"}
-    q = _run(["nvidia-smi", "--query-gpu=name,driver_version,clocks.max.sm", "--format=csv,noheader"])
+        return {"gpu": "none", "driver": "none", "cuda": "none", "power_mode": "unknown", "clocks": ""}
+    fields = [
+        "name", "driver_version", "clocks.sm", "clocks.max.sm", "power.management", "power.limit", "pstate",
+    ]  # fmt: skip
+    q = _run(["nvidia-smi", f"--query-gpu={','.join(fields)}", "--format=csv,noheader"])
     parts = [p.strip() for p in q.splitlines()[0].split(",")] if q else []
+    parts += ["unknown"] * (len(fields) - len(parts))
+    v = dict(zip(fields, parts, strict=True))
     cuda = _run(["bash", "-c", "nvidia-smi | grep -o 'CUDA Version: [0-9.]*'"]).replace("CUDA Version: ", "")
     return {
-        "gpu": parts[0] if parts else "unknown",
-        "driver": parts[1] if len(parts) > 1 else "unknown",
+        "gpu": v["name"],
+        "driver": v["driver_version"],
         "cuda": cuda or "unknown",
-        "power_mode": "unrecorded (set and note manually)",
+        "power_mode": f"power.management={v['power.management']}; power.limit={v['power.limit']}; pstate={v['pstate']}",
+        "clocks": f"sm={v['clocks.sm']}; max_sm={v['clocks.max.sm']} (at run start; note boost throttling)",
     }
 
 

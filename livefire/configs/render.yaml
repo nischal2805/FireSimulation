@@ -20,3 +20,7 @@ char_dark:      {value: 0.85,  unit: "-",      range: [0.0, 1.0],      status: a
 ash_color:      {value: [0.12, 0.11, 0.10], unit: "linear RGB", range: [0.0, 1.0], status: artistic}
 depth_tol:      {value: 0.02,  unit: "m",      range: [0.001, 0.2],    status: artistic}
 exposure:       {value: 1.0,   unit: "-",      range: [0.1, 10.0],     status: artistic}
+# Flame appearance from the combustion-intensity field (P0-008b, ADR-0004):
+# T_vis = max(T_g, T_amb + dT_flame * (1 - exp(-flame / flame_ref))) drives emission colour and intensity.
+dT_flame:       {value: 1100,  unit: "K",      range: [0, 2500],       status: artistic}
+flame_ref:      {value: 1.0e6, unit: "W/m^3",  range: [1.0e3, 1.0e9],  status: artistic}

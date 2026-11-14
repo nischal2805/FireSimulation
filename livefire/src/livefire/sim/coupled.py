@@ -49,7 +49,8 @@ class FireSimulation:
     ["device"]`` (``cpu`` here). Not thread-safe (single owner). The snapshot is never mutated.
 
     ``FireStateView`` fields (device arrays, valid until the next step, read-only for the renderer): ``T_g`` (G,G,G)
-    float32 K, ``soot`` (G,G,G) float32 kg/m^3 (mass concentration), ``char`` / ``removed`` (N_e,) float32 0..1
+    float32 K, ``soot`` (G,G,G) float32 kg/m^3 (mass concentration), ``flame`` (G,G,G) float32 W/m^3 (combustion
+    intensity, ADR-0004), ``char`` / ``removed`` (N_e,) float32 0..1
     (fresh float32 copies of the float64 model state made on access), ``h_gas`` m, ``roi`` AABB.
     """
 
@@ -119,7 +120,7 @@ class FireSimulation:
         for _ in range(n_steps):
             g.sample_T(self._pts, self._t_samp)
             heat_w, soot_kg_s = s.step(dt, self._t_samp)
-            g.step(dt, self._pts, heat_w, soot_kg_s)
+            g.step(dt, self._pts, heat_w, soot_kg_s, s.released_power_W)
             self._step_count += 1
         wp.synchronize_device(self.device)
         if n_steps:
@@ -170,7 +171,7 @@ class FireSimulation:
         g = self.gas
         st = self.surface.fire_state_host(
             g.T_g.numpy().copy(), g.velocity_cell_centered(), g.soot.numpy().copy(),
-            (g.p.numpy() * self.params["rho_g"]).astype(np.float32),
+            (g.p.numpy() * self.params["rho_g"]).astype(np.float32), g.flame.numpy().copy(),
         )  # fmt: skip
         st.t_sim, st.step = self.t_sim, self._step_count
         return st
@@ -202,6 +203,10 @@ class FireSimulation:
     @property
     def soot(self) -> wp.array:
         return self.gas.soot
+
+    @property
+    def flame(self) -> wp.array:
+        return self.gas.flame
 
     @property
     def char(self) -> wp.array:

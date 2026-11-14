@@ -25,3 +25,6 @@ cfl_max:    {value: 3.0,   unit: "-",         range: [0.5, 10],     status: arti
 n_iters:    {value: 60,    unit: "-",         range: [5, 500],      status: artistic}
 wind_speed: {value: 0.0,   unit: "m/s",       range: [0, 5],        status: artistic}
 wind_noise: {value: 0.0,   unit: "m/s",       range: [0, 1],        status: artistic}
+
+# --- combustion-intensity field (P0-008b, ADR-0004)
+k_flame:    {value: 6.0,   unit: "1/s",       range: [0.5, 50],      status: artistic}

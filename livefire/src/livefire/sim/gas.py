@@ -107,31 +107,40 @@ def advect_w_k(
 @wp.kernel
 def advect_scalars_k(
     u: wp.array3d(dtype=wp.float32), v: wp.array3d(dtype=wp.float32), w: wp.array3d(dtype=wp.float32),
-    t: wp.array3d(dtype=wp.float32), s: wp.array3d(dtype=wp.float32),
-    t_out: wp.array3d(dtype=wp.float32), s_out: wp.array3d(dtype=wp.float32), c: float,
+    t: wp.array3d(dtype=wp.float32), s: wp.array3d(dtype=wp.float32), f: wp.array3d(dtype=wp.float32),
+    t_out: wp.array3d(dtype=wp.float32), s_out: wp.array3d(dtype=wp.float32), f_out: wp.array3d(dtype=wp.float32),
+    c: float, f_decay: float,
 ):  # fmt: skip
+    """Semi-Lagrangian advection of ``T_g``, ``soot`` and the flame field; ``flame`` also decays by ``f_decay``
+    (= exp(-k_flame dt)) here, before this step's source is added (so a steady source converges to ``P / h^3``)."""
     i, j, k = wp.tid()
     x = wp.vec3(float(i) + 0.5, float(j) + 0.5, float(k) + 0.5)
     xb = _backtrace(u, v, w, x, c)
     o = wp.vec3(0.5, 0.5, 0.5)
     t_out[i, j, k] = _samp(t, xb, o)
     s_out[i, j, k] = _samp(s, xb, o)
+    f_out[i, j, k] = _samp(f, xb, o) * f_decay
 
 
 @wp.kernel
 def scatter_sources_k(
     pos: wp.array2d(dtype=wp.float32), heat_w: wp.array(dtype=wp.float32), soot_kg_s: wp.array(dtype=wp.float32),
+    power_w: wp.array(dtype=wp.float32),
     solid: wp.array3d(dtype=wp.int32), t: wp.array3d(dtype=wp.float32), s: wp.array3d(dtype=wp.float32),
-    lost: wp.array(dtype=wp.int32), roi_min: wp.vec3, inv_h: float, dt: float, k_heat: float, k_soot: float, g: int,
+    fl: wp.array3d(dtype=wp.float32),
+    lost: wp.array(dtype=wp.int32), roi_min: wp.vec3, inv_h: float, dt: float, k_heat: float, k_soot: float,
+    k_flame: float, g: int,
 ):  # fmt: skip
     """Trilinear scatter at element sample points onto the 8 surrounding cell centres, fluid cells only
-    (weights renormalised). ``k_heat = 1 / (rho_g c_p h^3)`` [K/J], ``k_soot = 1 / h^3`` [1/m^3]."""
+    (weights renormalised). ``k_heat = 1 / (rho_g c_p h^3)`` [K/J], ``k_soot = 1 / h^3`` [1/m^3],
+    ``k_flame = (1 - exp(-k_flame dt)) / h^3`` [1/m^3]; the flame field gains ``power_w * k_flame`` [W/m^3]."""
     e = wp.tid()
     q = wp.vec3(pos[e, 0], pos[e, 1], pos[e, 2])
     ci = (q - roi_min) * inv_h - wp.vec3(0.5, 0.5, 0.5)
     hj = heat_w[e] * dt
     sj = soot_kg_s[e] * dt
-    if hj == 0.0 and sj == 0.0:
+    pj = power_w[e]
+    if hj == 0.0 and sj == 0.0 and pj == 0.0:
         return
     if ci[0] < -0.5 or ci[1] < -0.5 or ci[2] < -0.5 or ci[0] > float(g) - 0.5 or ci[1] > float(g) - 0.5 or ci[2] > float(g) - 0.5:
         wp.atomic_add(lost, 0, 1)
@@ -167,6 +176,7 @@ def scatter_sources_k(
         if solid[ii, jj, kk] == 0:
             wp.atomic_add(t, ii, jj, kk, wt / wsum * hj * k_heat)
             wp.atomic_add(s, ii, jj, kk, wt / wsum * sj * k_soot)
+            wp.atomic_add(fl, ii, jj, kk, wt / wsum * pj * k_flame)
 
 
 @wp.kernel
@@ -393,13 +403,15 @@ def grad_w_k(w: wp.array3d(dtype=wp.float32), p: wp.array3d(dtype=wp.float32), f
 
 @wp.kernel
 def finish_k(
-    t: wp.array3d(dtype=wp.float32), s: wp.array3d(dtype=wp.float32), solid: wp.array3d(dtype=wp.int32),
+    t: wp.array3d(dtype=wp.float32), s: wp.array3d(dtype=wp.float32), fl: wp.array3d(dtype=wp.float32),
+    solid: wp.array3d(dtype=wp.int32),
     cool: float, decay: float, t_amb: float, t_max: float, count: wp.array(dtype=wp.int32),
 ):  # fmt: skip
     i, j, k = wp.tid()
     if solid[i, j, k] != 0:
         t[i, j, k] = t_amb
         s[i, j, k] = 0.0
+        fl[i, j, k] = 0.0
         return
     tn = t_amb + (t[i, j, k] - t_amb) * cool
     if tn > t_max:
@@ -414,7 +426,8 @@ class GasSolver:
     """MAC-grid gas solver on ``G^3`` cells of size ``h`` [m].
 
     Owns float32 device arrays: ``u (G+1,G,G)``, ``v (G,G+1,G)``, ``w (G,G,G+1)`` [m/s] face velocities,
-    ``T_g (G,G,G)`` [K], ``soot (G,G,G)`` [kg/m^3, mass concentration], ``p (G,G,G)`` kinematic
+    ``T_g (G,G,G)`` [K], ``soot (G,G,G)`` [kg/m^3, mass concentration], ``flame (G,G,G)`` [W/m^3] combustion-intensity
+    (heat-release-rate density proxy, a passive scalar for the renderer only, ADR-0004), ``p (G,G,G)`` kinematic
     pressure [m^2/s^2] (multiply by ``rho_g`` for Pa). ``solid_mask`` (G,G,G) uint8, host. World frame, index
     ``[ix,iy,iz]``, cell centre ``roi_min + (i+.5) h``. Parameters from ``configs/sim.yaml`` (``Params``).
     Vorticity confinement is applied as ``f = eps_vc * h * (N x omega)`` [m/s^2] (N = normalised gradient of
@@ -463,6 +476,9 @@ class GasSolver:
         self._T2 = z3(G, G, G)
         self.soot = z3(G, G, G)
         self._s2 = z3(G, G, G)
+        self.flame = z3(G, G, G)
+        self._f2 = z3(G, G, G)
+        self._no_power = z3(1)  # zeros stand-in (resized on demand) for steps without released-power input
         self.p = z3(G, G, G)
         self._div = z3(G, G, G)
         self._cv = wp.zeros((G, G, G), dtype=wp.vec3, device=d)
@@ -480,7 +496,7 @@ class GasSolver:
     # ---- state ------------------------------------------------------------------------------
     def reset(self) -> None:
         """Quiescent ambient state; counters cleared."""
-        for a in (self.u, self.v, self.w, self.soot, self.p):
+        for a in (self.u, self.v, self.w, self.soot, self.flame, self.p):
             a.zero_()
         self.T_g.fill_(self._p["T_amb"])
         for c in (self._vel_clamps, self._T_clamps, self._lost, self._norms):
@@ -493,8 +509,12 @@ class GasSolver:
         self.v.assign(np.ascontiguousarray(v, dtype=np.float32))
         self.w.assign(np.ascontiguousarray(w, dtype=np.float32))
 
-    def set_scalars(self, T_g: np.ndarray | None = None, soot: np.ndarray | None = None) -> None:
-        """Load cell-centred ``T_g`` [K] and/or ``soot`` (G,G,G) from host arrays."""
+    def set_scalars(
+        self, T_g: np.ndarray | None = None, soot: np.ndarray | None = None, flame: np.ndarray | None = None
+    ) -> None:
+        """Load cell-centred ``T_g`` [K], ``soot`` and/or ``flame`` [W/m^3] (G,G,G) from host arrays."""
+        if flame is not None:
+            self.flame.assign(np.ascontiguousarray(flame, dtype=np.float32))
         if T_g is not None:
             self.T_g.assign(np.ascontiguousarray(T_g, dtype=np.float32))
         if soot is not None:
@@ -550,9 +570,12 @@ class GasSolver:
         src_pos: wp.array | None = None,
         heat_W: wp.array | None = None,
         soot_kg_s: wp.array | None = None,
+        power_W: wp.array | None = None,
     ) -> None:
         """Advance ``dt`` [s]. Optional element sources: ``src_pos`` (N,3) float32 world [m], ``heat_W`` (N,)
-        [W], ``soot_kg_s`` (N,) [kg/s] (device arrays); injected as ``heat_J = heat_W dt``, ``soot_kg = soot_kg_s dt``."""
+        [W], ``soot_kg_s`` (N,) [kg/s] (device arrays); injected as ``heat_J = heat_W dt``, ``soot_kg = soot_kg_s dt``.
+        ``power_W`` (N,) [W] is the total released power per element (feedback + gas parts); it feeds the
+        ``flame`` field as ``flame += P / h^3 (1 - exp(-k_flame dt))`` (None: no flame source)."""
         p, d, G, h = self._p, self.device, self.G, self.h
         c = dt / h
         dim = (G,) * 3
@@ -562,20 +585,29 @@ class GasSolver:
         wp.launch(advect_w_k, dim=self.w.shape, inputs=[self.u, self.v, self.w, self._w2, c], device=d)
         wp.launch(
             advect_scalars_k, dim=dim, device=d,
-            inputs=[self.u, self.v, self.w, self.T_g, self.soot, self._T2, self._s2, c],
+            inputs=[self.u, self.v, self.w, self.T_g, self.soot, self.flame, self._T2, self._s2, self._f2, c,
+                    math.exp(-p["k_flame"] * dt)],
         )  # fmt: skip
         self.u, self._u2 = self._u2, self.u
         self.v, self._v2 = self._v2, self.v
         self.w, self._w2 = self._w2, self.w
         self.T_g, self._T2 = self._T2, self.T_g
         self.soot, self._s2 = self._s2, self.soot
+        self.flame, self._f2 = self._f2, self.flame
         # 2. sources
         if src_pos is not None and heat_W is not None and soot_kg_s is not None:
             k_heat = 1.0 / (p["rho_g"] * p["c_p"] * h**3)
+            k_fl = (1.0 - math.exp(-p["k_flame"] * dt)) / h**3
+            if power_W is None:
+                if self._no_power.shape[0] != src_pos.shape[0]:
+                    self._no_power = wp.zeros(src_pos.shape[0], dtype=wp.float32, device=d)
+                pw = self._no_power
+            else:
+                pw = power_W
             wp.launch(
                 scatter_sources_k, dim=src_pos.shape[0], device=d,
-                inputs=[src_pos, heat_W, soot_kg_s, self.solid, self.T_g, self.soot, self._lost, self.roi_min,
-                        1.0 / h, dt, k_heat, 1.0 / h**3, G],
+                inputs=[src_pos, heat_W, soot_kg_s, pw, self.solid, self.T_g, self.soot, self.flame, self._lost,
+                        self.roi_min, 1.0 / h, dt, k_heat, 1.0 / h**3, k_fl, G],
             )  # fmt: skip
         # 3. buoyancy
         wp.launch(buoyancy_k, dim=self.w.shape, inputs=[self.w, self.T_g, self.fw, dt, p["g"], p["T_amb"]], device=d)
@@ -596,7 +628,7 @@ class GasSolver:
         # 8. cooling, soot decay, temperature clamp
         wp.launch(
             finish_k, dim=dim, device=d,
-            inputs=[self.T_g, self.soot, self.solid, math.exp(-p["k_cool"] * dt), math.exp(-p["k_soot"] * dt),
+            inputs=[self.T_g, self.soot, self.flame, self.solid, math.exp(-p["k_cool"] * dt), math.exp(-p["k_soot"] * dt),
                     p["T_amb"], p["T_g_max"], self._T_clamps],
         )  # fmt: skip
         self.step_count += 1

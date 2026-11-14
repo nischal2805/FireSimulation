@@ -224,6 +224,7 @@ class FireState:
     burning: "u8[N_e]"
     # gas grid [G,G,G]
     T_g: "f32[...]"; vel: "f32[...,3]"; soot: "f32[...]"; p: "f32[...]"
+    flame: "f32[...]"        # combustion intensity, W/m^3 (heat-release-rate density proxy, ADR-0004)
     t_sim: float; step: int
 ```
 
@@ -571,3 +572,4 @@ Date, status (proposed / accepted / superseded)
 
 - v2: graphics-first phases; geometry contract; frozen-snapshot architecture; surface-element hybrid; numerical methods with units; burn-away levels; latency definitions; revised metrics; agent execution contract.
 - v2.1 (P0-008): ADR-0002 (accepted): gas velocity is stored staggered (MAC) internally; the public `FireState.vel` stays cell-centred `[G,G,G,3]`, exposed through an accessor; grid size must be even. ADR-0003 (accepted): combustion energy split `f_feedback` surface / `1 - f_feedback` gas, surface re-radiation, counted clamps on `T_s`, `T_g` and velocity (PRD 8.2, 8.4). `configs/sim.yaml` gains the gas section.
+- v2.2 (P0-008b): ADR-0004 (accepted): new passive gas-grid field `flame` (combustion intensity, W/m^3) fed by the released power of burning elements, advected and decayed with `k_flame`; the renderer derives a visual temperature `T_vis = max(T_g, T_amb + dT_flame (1 - exp(-flame / flame_ref)))` for emission (PRD 6.2, 7.4). `FireStateView`/`FireStateHost` gain `flame`; `configs/sim.yaml` gains `k_flame`, `configs/render.yaml` gains `dT_flame`, `flame_ref`.

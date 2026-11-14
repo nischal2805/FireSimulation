@@ -85,6 +85,7 @@ def combustion_kernel(
     y_soot: wp.array(dtype=wp.float64),
     heat_w: wp.array(dtype=wp.float32),
     soot: wp.array(dtype=wp.float32),
+    power: wp.array(dtype=wp.float32),
     decay: wp.float64,
     f_fb: wp.float64,
     eps_m: wp.float64,
@@ -93,6 +94,7 @@ def combustion_kernel(
     i = wp.tid()
     heat_w[i] = 0.0
     soot[i] = 0.0
+    power[i] = 0.0
     if flam[i] == wp.uint8(0):
         return
     # 2. ignition exposure (PRD 8.3)
@@ -115,6 +117,7 @@ def combustion_kernel(
         m_fuel[i] = mn
         heat_w[i] = wp.float32((_F64(1.0) - f_fb) * chi[i] * dh[i] * used * area[i] / dt)
         soot[i] = wp.float32(y_soot[i] * used * area[i] / dt)
+        power[i] = wp.float32(chi[i] * dh[i] * used * area[i] / dt)
         den = m0[i] - m_res[i]
         c = _F64(0.0)
         if den > _F64(0.0):
@@ -154,6 +157,7 @@ class SurfaceFireModel:
         self.clamp_count = wp.zeros(1, dtype=wp.int32, device=d)
         self.heat_W = wp.zeros(self.n, dtype=wp.float32, device=d)
         self.soot_kg_s = wp.zeros(self.n, dtype=wp.float32, device=d)
+        self.power_W = wp.zeros(self.n, dtype=wp.float32, device=d)
         self.t_sim = 0.0
         self.step_count = 0
         self.last_substeps = 0
@@ -262,7 +266,7 @@ class SurfaceFireModel:
             combustion_kernel, dim=self.n, device=d,
             inputs=[self.T_s, self.E, self.m_fuel, self.char, self.removed, self.burning, self.area,
                     self.flam, self.consumed_flag, self.m0, self.m_res, self.t_ign, self.t_delay,
-                    self.mdot_ref, self.dh, self.chi, self.y_soot, self.heat_W, self.soot_kg_s,
+                    self.mdot_ref, self.dh, self.chi, self.y_soot, self.heat_W, self.soot_kg_s, self.power_W,
                     p["ignition_decay"], p["f_feedback"], p["eps_m"], dt],
         )  # fmt: skip
         self.last_substeps = n_sub
@@ -270,6 +274,13 @@ class SurfaceFireModel:
         self.t_sim += dt
         self.step_count += 1
         return self.heat_W, self.soot_kg_s
+
+    @property
+    def released_power_W(self) -> wp.array:
+        """Total released power per element ``chi * dH * consumed * A / dt`` [W] (feedback + gas parts) of the
+        last :meth:`step`: float32 (N,) device array owned by the model, overwritten by the next call. Read-only
+        accessor for the combustion-intensity field (ADR-0004); :meth:`step` return values are unchanged."""
+        return self.power_W
 
     # ---- readback -------------------------------------------------------------------------
     def clamp_events(self) -> int:
@@ -285,12 +296,15 @@ class SurfaceFireModel:
             "burning": self.burning.numpy().copy(),
         }  # fmt: skip
 
-    def fire_state_host(self, T_g: np.ndarray, vel: np.ndarray, soot: np.ndarray, p: np.ndarray) -> FireStateHost:
-        """Assemble a ``FireStateHost`` (float32 copies) from this model plus caller-supplied gas fields."""
+    def fire_state_host(
+        self, T_g: np.ndarray, vel: np.ndarray, soot: np.ndarray, p: np.ndarray, flame: np.ndarray | None = None
+    ) -> FireStateHost:
+        """Assemble a ``FireStateHost`` (float32 copies) from this model plus caller-supplied gas fields
+        (``flame`` [W/m^3] defaults to zeros)."""
         s = self.to_host()
         f = lambda a: a.astype(np.float32)
         return FireStateHost(
             T_s=f(s["T_s"]), ignition_exposure=f(s["E"]), m_fuel=f(s["m_fuel"]), char=f(s["char"]),
             removed=f(s["removed"]), burning=s["burning"].astype(np.uint8), T_g=T_g, vel=vel, soot=soot,
-            p=p, t_sim=self.t_sim, step=self.step_count,
+            p=p, flame=np.zeros_like(T_g) if flame is None else flame, t_sim=self.t_sim, step=self.step_count,
         )  # fmt: skip

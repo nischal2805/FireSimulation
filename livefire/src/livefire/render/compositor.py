@@ -42,7 +42,7 @@ class ArrayFireState:
     """Simple ``FireStateView`` backed by NumPy or Warp arrays (prescribed fields; tests and demo).
 
     T_g, soot: (G,G,G) float32 cell-centred [ix,iy,iz] (K, mass fraction); char, removed: (N_e,)
-    float32 0..1; h_gas metres; roi world AABB."""
+    float32 0..1; h_gas metres; roi world AABB; flame: optional (G,G,G) float32 W/m^3 (None = no flame)."""
 
     T_g: Any
     soot: Any
@@ -50,6 +50,7 @@ class ArrayFireState:
     removed: Any
     h_gas: float
     roi: AABB
+    flame: Any = None
 
 
 def _to_np(a: Any) -> NDArray:
@@ -126,6 +127,7 @@ class Compositor:
     def __init__(self, snapshot: SceneSnapshot, params: Params | None = None, device: str | None = None,
                  volume_scale: float | None = None) -> None:  # fmt: skip
         self.p = params or load_params("render")
+        self.t_amb = float(load_params("sim")["T_amb"])  # ambient for the flame visual temperature
         self.device = device or str(load_yaml("app").get("device", "cpu"))
         self.snap = snapshot
         self.scale = float(volume_scale if volume_scale is not None else self.p["volume_scale"])
@@ -151,9 +153,12 @@ class Compositor:
     def peak_vram_reserved_mb(self) -> float:
         return 0.0
 
-    def _active_box(self, T: NDArray, soot: NDArray, fire: Any) -> AABB | None:
-        """World AABB of cells that can emit/absorb, padded by one cell for trilinear support."""
+    def _active_box(self, T: NDArray, soot: NDArray, fire: Any, flame: NDArray | None = None) -> AABB | None:
+        """World AABB of cells that can emit/absorb (hot, sooty or flaming: ``flame > 0.01 flame_ref``), padded
+        by one cell for trilinear support."""
         act = (T > self.p["T_emit_min"]) | (soot > SOOT_ACTIVE_EPS)
+        if flame is not None:
+            act = act | (flame > 0.01 * self.p["flame_ref"])
         if not act.any():
             return None
         h = float(fire.h_gas)
@@ -175,7 +180,9 @@ class Compositor:
         Hs, Ws = view.Hs, view.Ws
         T_out = np.ones((Hs, Ws), np.float32)
         L_out = np.zeros((Hs, Ws, 3), np.float32)
-        box = self._active_box(Tn, Sn, fire)
+        flame = getattr(fire, "flame", None)
+        Fn = None if flame is None else _to_np(flame)
+        box = self._active_box(Tn, Sn, fire, Fn)
         if box is not None:
             u0, u1, v0, v1 = view.pixel_rect(box)
             dsub = view.dirs_np[v0:v1, u0:u1].reshape(-1, 3).astype(np.float64)
@@ -189,15 +196,17 @@ class Compositor:
             dev = self.device
             t_k = time.perf_counter()
             Tw, Sw = _to_wp3(fire.T_g, dev), _to_wp3(fire.soot, dev)
+            Fw = wp.zeros((g, g, g), dtype=wp.float32, device=dev) if flame is None else _to_wp3(flame, dev)
             oT = wp.array(T_out, dtype=wp.float32, device=dev)
             oL = wp.array(L_out, dtype=wp.vec3, device=dev)
             p = self.p
             wp.launch(
                 march_kernel, dim=(v1 - v0, u1 - u0),
-                inputs=[Tw, Sw, self.lut, view.dirs, wp.array(t0, dtype=wp.float32, device=dev),
+                inputs=[Tw, Sw, Fw, self.lut, view.dirs, wp.array(t0, dtype=wp.float32, device=dev),
                         wp.array(t1, dtype=wp.float32, device=dev), wp.vec3(*view.origin), wp.vec3(*fire.roi.min),
                         h, g, p["step_factor"] * h, p["t_min"], p["emission_scale"], p["T_emit_min"],
-                        p["T_emit_ref"], p["emission_power"], p["k_abs"], p["soot_albedo"] * p["ambient"],
+                        p["T_emit_ref"], p["emission_power"], p["k_abs"], self.t_amb, p["dT_flame"], p["flame_ref"],
+                        p["soot_albedo"] * p["ambient"],
                         T_LUT_MIN, T_LUT_MAX, u0, v0, oT, oL],
                 device=dev,
             )  # fmt: skip

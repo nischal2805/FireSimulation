@@ -132,7 +132,7 @@ def _state(n=5, g=3):
     r = np.random.default_rng(0)
     f = lambda *s: r.random(s).astype(np.float32)
     return FireStateHost(f(n), f(n), f(n), f(n), f(n), np.ones(n, np.uint8), f(g, g, g),
-                         f(g, g, g, 3), f(g, g, g), f(g, g, g), 0.5, 3)  # fmt: skip
+                         f(g, g, g, 3), f(g, g, g), f(g, g, g), f(g, g, g), 0.5, 3)  # fmt: skip
 
 
 def test_digest_stable_and_sensitive():

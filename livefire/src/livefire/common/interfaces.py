@@ -165,7 +165,8 @@ class FireStateView(Protocol):
     """Read-only view of the simulation's device-resident fields, for the renderer. Fields are
     arrays on the simulation device (framework tensors; opaque ``Any`` here), world frame,
     contiguous, valid until the next ``SimulationBackend.step``. Shapes: T_g (G,G,G) K,
-    soot (G,G,G) soot mass concentration (kg/m^3), char (N_e,) 0..1, removed (N_e,) 0..1,
+    soot (G,G,G) soot mass concentration (kg/m^3), flame (G,G,G) combustion intensity (W/m^3, heat-release-rate
+    density proxy, ADR-0004), char (N_e,) 0..1, removed (N_e,) 0..1,
     h_gas float metres per cell, roi AABB (world metres). The renderer must never write them.
     Synchronisation: the caller guarantees the sim stream has completed before reading. Tied
     to the snapshot's calib_version through the reset snapshot."""
@@ -175,6 +176,9 @@ class FireStateView(Protocol):
 
     @property
     def soot(self) -> Any: ...
+
+    @property
+    def flame(self) -> Any: ...
 
     @property
     def char(self) -> Any: ...

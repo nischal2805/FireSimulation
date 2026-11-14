@@ -1,9 +1,10 @@
 """Ray-march kernel (NVIDIA Warp) for the fire volume (PRD 7.4).
 
 Per pixel of a (possibly reduced) view buffer, march a world-space ray through the cell-centred
-fields T_g and soot (shape (G,G,G), index [ix,iy,iz], centre = roi_min + (i+0.5) h), sampled
+fields T_g, soot and flame (shape (G,G,G), index [ix,iy,iz], centre = roi_min + (i+0.5) h), sampled
 trilinearly in world space. Output transmittance T_vol and added radiance L_vol (linear RGB).
-Emission is absorbed by soot along the ray.
+Emission uses the visual temperature ``T_vis = max(T_g, T_amb + dT_flame (1 - exp(-flame / flame_ref)))`` and is
+absorbed by soot along the ray.
 Units: ``soot`` is read as kg/m^3, so ``sigma_a = k_abs * soot`` is 1/m (k_abs in m^2/kg); emission is added as
 ``emission_scale [1/m] * lut(T) * f^p * ds`` (radiance per metre of path). Read-only on the fields. Device: any Warp device.
 """
@@ -47,6 +48,7 @@ def _lut(lut: wp.array(dtype=wp.vec3), T: float, t_lo: float, t_hi: float):
 def march_kernel(
     T_g: wp.array3d(dtype=wp.float32),
     soot: wp.array3d(dtype=wp.float32),
+    flame: wp.array3d(dtype=wp.float32),  # combustion intensity [W/m^3] (ADR-0004)
     lut: wp.array(dtype=wp.vec3),
     dirs: wp.array2d(dtype=wp.vec3),  # (Hs,Ws) unit world directions
     t0: wp.array2d(dtype=wp.float32),  # (Hs,Ws) march start, ray distance [m]
@@ -62,6 +64,9 @@ def march_kernel(
     T_emit_ref: float,
     emission_power: float,
     k_abs: float,
+    t_amb: float,
+    dT_flame: float,
+    flame_ref: float,
     scatter: float,  # soot_albedo * ambient
     lut_lo: float,
     lut_hi: float,
@@ -86,6 +91,9 @@ def march_kernel(
             gp = (pw - roi_min) / h - wp.vec3(0.5, 0.5, 0.5)
             Tk = _trilinear(T_g, gp, g)
             s = _trilinear(soot, gp, g)
+            fl = _trilinear(flame, gp, g)
+            if fl > 0.0 and dT_flame > 0.0:  # visual temperature from the combustion intensity (world space)
+                Tk = wp.max(Tk, t_amb + dT_flame * (1.0 - wp.exp(-fl / flame_ref)))
             sig = k_abs * wp.max(s, 0.0)
             f = wp.max((Tk - T_emit_min) / (T_emit_ref - T_emit_min), 0.0)
             if f > 0.0:

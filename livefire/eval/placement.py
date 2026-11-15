@@ -154,6 +154,7 @@ def placement_study(bundle: AcqBundle, *, region_xy: tuple[float, float, float, 
     for a, b in itertools.combinations(cams, 2):
         va, vb = bundle.cameras[a].center_world - centre, bundle.cameras[b].center_world - centre
         ang = float(np.degrees(np.arccos(np.clip(va @ vb / (np.linalg.norm(va) * np.linalg.norm(vb)), -1.0, 1.0))))
+        ang = round(ang, 6)  # arccos round-off (60 deg -> 59.99999999999999) must not cross a band edge
         angles[(a, b)] = ang
         ok = p["angle_min_deg"] <= ang <= p["angle_max_deg"]
         row("camera_angle", f"cam{a}-cam{b}", ang, "deg", f"{p['angle_min_deg']}-{p['angle_max_deg']}", "pass" if ok else "FAIL",

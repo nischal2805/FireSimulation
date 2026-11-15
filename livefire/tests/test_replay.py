@@ -142,4 +142,7 @@ def test_replay_tolerance_branch(run_dir, tmp_path):
     z["T_g"] = z["T_g"] + 1.0
     np.savez(tmp_path / "final_state.npz", **z)
     assert not replay(tmp_path, force_tolerance=True)["ok"]
-    assert replay(tmp_path)["ok"] and replay(tmp_path)["mode"] == "digest"  # CPU default stays exact digest
+    cpu = load_yaml("app")["device"] == "cpu"
+    # unforced: CPU digest ignores the perturbed npz; a GPU device compares the clean run with tolerance
+    r = replay(tmp_path if cpu else out)
+    assert r["ok"] and r["mode"] == ("digest" if cpu else "tolerance")

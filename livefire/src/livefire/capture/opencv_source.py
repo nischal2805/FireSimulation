@@ -208,11 +208,7 @@ class OpenCVCameraSource(_ThreadedSource):
                 params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self._timeout_ms, cv2.CAP_PROP_READ_TIMEOUT_MSEC, self._timeout_ms]
                 try:
                     cap = cv2.VideoCapture(self._source, self._api, params)
-                except cv2.error:
-                    cap = None
-                if cap is None or not cap.isOpened():
-                    if cap is not None:
-                        cap.release()
+                except cv2.error:  # build rejects the timeout props; a plain failed open must not retry untimed (~5 s)
                     cap = cv2.VideoCapture(self._source, self._api)
             else:
                 cap = cv2.VideoCapture(self._source, self._api)

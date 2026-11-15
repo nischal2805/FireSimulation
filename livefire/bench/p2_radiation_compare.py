@@ -118,7 +118,7 @@ def cost_rows(
                     surface_elements=model.n,
                     notes=f"ignite radius {r} m at {IGNITE_POINT.tolist()}; {n_burn} burning at start, {n_end} at end; "
                           f"repeats={repeats} samples_per_repeat={spr}; first_launch_ms={t['first_launch_ms']:.1f}; "
-                          f"T_g = T_amb; rad_mode={mode}; {extra}; dt={dt:.5f}; CPU only, cores={os.cpu_count()}"
+                          f"T_g = T_amb; rad_mode={mode}; {extra}; dt={dt:.5f}; " + (f"CPU only, cores={os.cpu_count()}" if device == "cpu" else f"device={device}")
                           + ("; quick run, not a baseline" if quick else ""),
                 )  # fmt: skip
                 _log(
@@ -234,21 +234,23 @@ def main(argv: list[str] | None = None) -> int:
     device = select_device(None)
     today = datetime.date.today().isoformat()
     pre = "quick_" if args.quick else ""
+    dev_tag = "cpu" if device == "cpu" else "gpu"
+    eff_tag = "" if device == "cpu" else "_gpu"  # CPU name kept: ADR-0006 cites it
     out_b = (
         Path(args.out_bench)
         if args.out_bench
-        else ROOT / "bench" / "results" / f"{pre}radiation_cpu_{today}.csv"
+        else ROOT / "bench" / "results" / f"{pre}radiation_{dev_tag}_{today}.csv"
     )
     out_e = (
         Path(args.out_effect)
         if args.out_effect
-        else ROOT / "eval" / "results" / f"{pre}radiation_effect_{today}.csv"
+        else ROOT / "eval" / "results" / f"{pre}radiation_effect{eff_tag}_{today}.csv"
     )
     dt = float(load_yaml("app")["dt_sim"])
     snap = snapshot_from_synthetic("table_v1")
     table = MaterialTable.load()
-    rec = BenchmarkRecorder("cpu", run_id=f"radiation-cpu-{today}", workload_version=WORKLOAD_VERSION)
-    meta = {"run_id": rec.base["run_id"], "date": today, "git_sha": rec.base["git_sha"], "device": "cpu"}
+    rec = BenchmarkRecorder(device, run_id=f"radiation-{dev_tag}-{today}", workload_version=WORKLOAD_VERSION)
+    meta = {"run_id": rec.base["run_id"], "date": today, "git_sha": rec.base["git_sha"], "device": device}
     t0 = time.perf_counter()
     _log(f"radiation compare: {snap.pos.shape[0]} elements, dt {dt:.5f}, quick={args.quick}")
     cost_rows(rec, snap, table, device, dt, args.quick)

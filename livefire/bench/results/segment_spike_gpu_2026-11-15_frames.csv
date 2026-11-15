@@ -1,0 +1,17 @@
+backend,cat_acc,dataset,frame,latencies_ms,latency_median_ms,latency_p95_ms,matched50,miou,n_gt,n_pred,peak_vram_alloc_mb,peak_vram_reserved_mb,pred_categories,recall50
+gdino_sam2,0.0,synthetic_table_v1,table_v1_cam0,460.6;458.0;434.8;437.4;438.1,438.0997,460.0607,4,0.7831689728741443,5,4,1153.750528,1417.674752,cardboard box;paper sheet;plastic bottle;towel,0.8
+gdino_sam2,0.25,synthetic_table_v1,table_v1_cam1,460.3;491.9;458.9;475.4;460.9,460.8917,488.6249,4,0.7750319199794738,5,4,1153.750528,1417.674752,cardboard box;ceramic mug;cloth;paper sheet,0.8
+gdino_sam2,nan,coco_val2017_subset,coco_632,355.7;347.9;363.5;350.3;349.2,350.3235,361.89795999999996,0,0.0,2,5,1047.589376,1417.674752,cardboard box;cardboard box;ceramic mug;paper sheet;plastic bottle,0.0
+gdino_sam2,nan,coco_val2017_subset,coco_776,337.7;320.9;327.2;318.6;332.6,327.1548,336.67712,1,0.1322137621860101,4,1,1124.598784,1417.674752,cloth,0.25
+gdino_sam2,nan,coco_val2017_subset,coco_802,342.5;356.2;329.7;329.8;337.1,337.1043,353.44718,0,0.016411316318404187,2,1,1130.743808,1417.674752,paper sheet,0.0
+gdino_sam2,nan,coco_val2017_subset,coco_1268,342.6;339.8;352.9;386.4;350.2,350.2243,379.74254,0,0.00010092175200161475,2,1,1124.598784,1417.674752,cardboard box,0.0
+gdino_sam2,nan,coco_val2017_subset,coco_1296,324.6;323.1;324.0;324.3;337.5,324.3431,334.8824,0,0.014914400287902937,3,2,1124.598784,1417.674752,metal cup;paper sheet,0.0
+gdino_sam2,nan,coco_val2017_subset,coco_1353,314.7;304.7;299.6;306.7;299.0,304.7231,313.11307999999997,0,0.0,3,0,1052.498944,1417.674752,,0.0
+mask2former,0.0,synthetic_table_v1,table_v1_cam0,152.2;153.9;152.1;166.7;153.9,153.9214,164.13332,1,0.16787938564016308,5,1,637.988864,838.8608,stop sign,0.2
+mask2former,nan,synthetic_table_v1,table_v1_cam1,150.3;139.5;140.1;149.8;142.1,142.0629,150.18026,0,0.0,5,0,637.76768,838.8608,,0.0
+mask2former,nan,coco_val2017_subset,coco_632,226.4;220.8;226.8;234.2;223.1,226.3653,232.7237,2,0.8873492843258419,2,22,392.316928,838.8608,bed;book;book;book;book;book;book;book;book;book;book;book;book;book;book;book;bottle;chair;clock;pottedplant;pottedplant;tvmonitor,1.0
+mask2former,nan,coco_val2017_subset,coco_776,143.7;140.2;142.9;149.9;145.1,143.7177,148.9422,3,0.7559784042541696,4,4,378.236928,838.8608,sofa;teddy bear;teddy bear;teddy bear,0.75
+mask2former,nan,coco_val2017_subset,coco_802,138.3;162.2;140.0;137.8;137.4,138.2975,157.76927999999998,2,0.9405770095455601,2,4,377.212928,838.8608,oven;refrigerator;refrigerator;refrigerator,1.0
+mask2former,nan,coco_val2017_subset,coco_1268,167.3;166.3;168.4;170.3;168.3,168.3384,169.91164,2,0.8290551138025362,2,10,377.980928,838.8608,backpack;boat;boat;boat;boat;handbag;person;person;person;person,1.0
+mask2former,nan,coco_val2017_subset,coco_1296,165.7;171.0;173.9;175.7;174.5,173.891,175.46114,2,0.6043199920086826,3,10,377.980928,838.8608,person;person;person;person;person;person;person;person;person;person,0.6666666666666666
+mask2former,nan,coco_val2017_subset,coco_1353,156.9;148.2;145.1;150.7;150.9,150.727,155.67586,1,0.42379071857133965,3,8,357.141504,838.8608,chair;oven;person;person;person;person;person;person,0.3333333333333333

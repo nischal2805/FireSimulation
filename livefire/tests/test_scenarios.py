@@ -162,13 +162,13 @@ def test_m9_quick_runs(tmp_path):
                        check=False, capture_output=True, text=True, timeout=600, cwd=ROOT)  # fmt: skip
     assert r.returncode in (0, 1), r.stderr[-2000:]
     files = sorted(p.name for p in out.glob("*.csv"))
-    assert any(f.startswith("m9_spread_") for f in files) and any(f.startswith("m9_summary_") for f in files)
+    assert any(f.startswith("quick_m9_spread_") for f in files) and any(f.startswith("quick_m9_summary_") for f in files)
 
 
 def test_ignition_patch_never_lights_the_target(table):
     """A large ignition radius lights the emitter object only, never the target 2 cm away (obj_id == emitter_obj)."""
-    from livefire.sim.coupled import FireSimulation  # noqa: PLC0415
-    from livefire.sim.scenarios import Scenario, ignite_object_patch, sim_params_with  # noqa: PLC0415
+    from livefire.sim.coupled import FireSimulation
+    from livefire.sim.scenarios import Scenario, ignite_object_patch, sim_params_with
 
     cfg = {**CFG, "grid": {**CFG["grid"], "G": 16}}
     e = Rect(0, "e", "paper", (0.5,) * 3, 1, 0.0, (-0.06, 0.1), (0.06, 0.22), two_sided=False, normal_sign=1.0)

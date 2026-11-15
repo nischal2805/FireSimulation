@@ -202,6 +202,8 @@ class MeasureSession:
 def layout_for(bundle: AcqBundle, max_w: int = 1600, max_h: int = 900) -> ViewLayout:
     cams = sorted(bundle.cameras)
     c0 = bundle.cameras[cams[0]]
+    if any((bundle.cameras[c].width, bundle.cameras[c].height) != (c0.width, c0.height) for c in cams):
+        raise ValueError("the measure window needs all cameras at the same resolution")
     return ViewLayout(c0.width, c0.height, len(cams), max_w, max_h)
 
 

@@ -12,7 +12,7 @@ synthetic data with known answers, so please report anything that behaves oddly.
 | --- | --- | --- | --- |
 | M6 fusion alignment | board corners reconstructed vs their known world positions | median error under 3 cm | `eval/alignment.py` |
 | M4 geometry accuracy | reconstructed distance vs tape-measured distance, MAE | reported in cm (no fixed target in the PRD) | `measure` + `eval/geometry_mae.py` |
-| M2 latency | `t_present - t_arrive`, p95 | 100 ms or less; glass-to-glass offset reported separately | `eval/latency.py` |
+| M2 latency | `t_present - t_arrive` (PRD target 100 ms or less; the tool reports p50/p95/p99 and uses p95 as its pass/fail rule); glass-to-glass offset reported separately | see PRD 11.1 | `eval/latency.py` |
 | Camera placement | angle, shared table area, depth coverage | pass the thresholds in `configs/placement.yaml` (untuned defaults) | `eval/placement.py` |
 
 Plus a few screenshots of live mode with the geometry overlay (`o`) and a fire on your real objects.
@@ -65,7 +65,7 @@ views). Aim for a held-out RMS below 1 px (the report prints it). Repeat for eve
 Lay the board **flat on the table** where both cameras see it fully, then:
 
 ```powershell
-uv run python -m livefire.app calib extrinsics --cams 0,1
+uv run python -m livefire.app calib extrinsics --cams "0,1"
 ```
 
 World origin = board centre, +X along the board's long side, +Z up, the table is the plane `z = 0`. The result is
@@ -84,7 +84,7 @@ paper, a box. Variety of heights and a few objects standing 5 to 20 cm tall make
 uv run python -m livefire.app measure --acquire-only
 ```
 
-About 10 s on the GPU (more on a CPU). It prints the bundle path, for example
+Allow a minute or so (depth inference time depends on your machine; no GPU timing has been measured yet). It prints the bundle path, for example
 `out/eval/acq_20261120_101500/acquisition.npz`, and writes `view_cam0.png`, `view_cam1.png`, `depth_cam0.png` and
 `depth_cam1.png` next to it. Use `--depth da2_relative_small` to try the other depth model. Use that path for everything
 that follows (shown below as `<BUNDLE>`).
@@ -98,7 +98,7 @@ uv run python eval/placement.py --bundle <BUNDLE>
 It prints the camera angle, distance, visible table fraction per camera, valid-depth coverage and the area seen by both
 cameras, and exits with code 1 and concrete guidance ("move one camera ...") when a threshold of
 `configs/placement.yaml` is violated. If the table is smaller than the default area, add
-`--region=-0.5,-0.4,0.5,0.4` (x0,y0,x1,y1 in metres from the board centre; note the `=` because of the minus sign). The
+`--region="-0.5,-0.4,0.5,0.4"` (x0,y0,x1,y1 in metres from the board centre; note the `=` because of the minus sign). The
 thresholds are untuned defaults: if it fails but the live overlay looks right, send the CSV and we will tune them. Fix
 real problems first (angle, overlap, lighting) and re-run steps 7 onward.
 
@@ -113,7 +113,7 @@ p95 error in cm (target: median under 3 cm). Output: `eval/results/alignment_des
 `alignment_desk_scene1_landmarks.csv` (every corner). Limitation: depth is anchored to the table plane over the board
 footprint, so board corners on the table are not fully independent of the reconstruction. For an independent check
 add landmarks that are **above the table**: note a few points of known world position (for example tape marks on the
-top of a box whose height you measured; x,y from a ruler relative to the board centre, +X along the board's long side)
+top of a box whose height you measured; x,y from a ruler relative to the board centre: +X along the board's long side to the right and +Y toward the top edge of the printed page, when you read the board with its long side horizontal; +Z up)
 and read their pixels from `view_cam0.png` / `view_cam1.png` in any image viewer. Put them in `landmarks.csv`:
 
 ```text
@@ -165,7 +165,7 @@ uv run python eval/latency.py out/live/live_<time>/latency.csv --label rtx4060_d
 ```
 
 Output `eval/results/latency_rtx4060_dual.csv`: per scope (`all`, `cam0`, `cam1`) capture-to-display p50/p95/p99/max
-(M2 target: p95 at most 100 ms), frame age, composite time, frame-time percentiles, delivered fps, dropped-frame rate
+(PRD target 100 ms or less; the tool's verdict column uses p95 against 100 ms), frame age, composite time, frame-time percentiles, delivered fps, dropped-frame rate
 and simulation lag. The first 30 frames and non-simulating states are ignored (`--skip-frames`, `--states`).
 
 ### Glass-to-glass offset (measured separately, once per camera)
@@ -182,7 +182,7 @@ M2 starts at the host timestamp when a frame reaches the PC. The delay inside th
 4. Add them to the latency report:
 
 ```powershell
-uv run python eval/latency.py out/live/live_<time>/latency.csv --label rtx4060_dual --glass 0=95,102,98,101,97 --glass 1=210,190,205,220,198
+uv run python eval/latency.py out/live/live_<time>/latency.csv --label rtx4060_dual --glass "0=95,102,98,101,97" --glass "1=210,190,205,220,198"
 ```
 
 The CSV then has `g2g_offset_ms` (median per camera) next to, not inside, the M2 columns.

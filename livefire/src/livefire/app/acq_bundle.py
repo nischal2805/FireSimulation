@@ -241,7 +241,7 @@ def _acquire_real(a: argparse.Namespace, say: Callable[[str], None]) -> AcqBundl
     sources = {int(c["cam_id"]): make_source(c, calib_version=0) for c in cfgs}
     app_cfg = load_yaml("app")
     grid_cfg = {**load_yaml("grid"), **({"G": a.grid} if a.grid else {})}
-    say("acquiring: do not touch the scene or the cameras for about 10 s (more on a CPU)")
+    say("acquiring: do not touch the scene or the cameras until it finishes")
     for s in sources.values():
         s.start()
     try:

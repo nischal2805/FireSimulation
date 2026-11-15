@@ -48,7 +48,7 @@ def _truth(cal: CameraCalibration):
 
 
 def truth_bundle(cams: dict[int, CameraCalibration], label: str = "synthetic truth") -> AcqBundle:
-    """Bundle whose frozen depth is the renderer's exact ground truth (hole = miss)."""
+    """# MOCK: bundle whose frozen depth is the renderer's exact ground truth (hole = miss), not an acquisition result."""
     tv = {c: _truth(cal) for c, cal in cams.items()}
     return AcqBundle(dict(cams), {c: t.depth.copy() for c, t in tv.items()}, {c: ~t.valid for c, t in tv.items()},
                      {c: t.rgb.copy() for c, t in tv.items()}, ROI, 0.01, None, label)  # fmt: skip
@@ -354,6 +354,9 @@ def test_measure_typing_hole_rejection_undo() -> None:
 
 def test_measure_keys_and_render() -> None:
     s = MeasureSession(truth_bundle(CAMS))
+    mixed = {0: CAMS[0], 1: replace(CAMS[1], width=640, height=360)}
+    with pytest.raises(ValueError, match="same resolution"):
+        layout_for(replace(s.bundle, cameras=mixed), 1400, 600)
     lay = layout_for(s.bundle, 1400, 600)
     before = render(s, lay)
     assert before.shape == (lay.pane_h + 70, lay.pane_w * 2, 3) and before.dtype == np.uint8

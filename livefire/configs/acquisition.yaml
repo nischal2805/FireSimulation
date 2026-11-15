@@ -24,3 +24,15 @@ acquisition:
   default_object_material: paper     # untagged objects (requires_review=True, HUD) so click-to-ignite works out of the box
   default_object_confidence: 0.3
   min_view_observations: 20    # surfels visible in a camera needed to list it as an observation of an object
+  # Segmentation-assisted acquisition (P3-002, P3R2/P3R3; used only when acquire_with_report gets `segmenters`).
+  # The number of keyframes per camera is `keyframes` in configs/segment.yaml.
+  segment:
+    majority_window_px: 3        # odd window of the per-surfel instance majority at the projected pixel
+  assoc:
+    visibility_tol_m: {value: 0.02, unit: "m", range: [0.002, 0.1], status: artistic}   # surfel Z vs accumulated depth to count as visible
+    min_iou: {value: 0.3, unit: "-", range: [0.05, 0.95], status: artistic}   # surfel-set IoU to link instances of different views
+    iou_tie: 0.05                # IoUs within this of the best candidate are ties, broken by CIELAB mean colour distance
+    min_instance_surfels: 10     # instances with fewer surfels, or sharing fewer surfels across views, are ignored (geometric label kept)
+    table_categories: [table]    # an instance with one of these categories belongs to the table object (obj 0)
+    table_cover: 0.5             # no table category: largest object holding >= this share of the geometric table surfels ...
+    table_overlap: 0.5           # ... and >= this fraction of its own surfels on the geometric table is the table

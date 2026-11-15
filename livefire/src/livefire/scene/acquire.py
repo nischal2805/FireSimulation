@@ -18,10 +18,11 @@ import numpy as np
 
 from livefire.capture.types import Frame
 from livefire.common.config import load_yaml
-from livefire.common.errors import CalibVersionError, ReconstructionError
+from livefire.common.errors import CalibVersionError, ReconstructionError, SegmentationError
 from livefire.common.geometry import AABB, CameraCalibration, project
 from livefire.common.log import get_logger
 from livefire.fusion.accumulate import AccumulatedDepth, accumulate_depth
+from livefire.fusion.associate import associate_objects, instance_colors, label_surfels
 from livefire.fusion.extract import extract_surface
 from livefire.fusion.objects import (
     DROPPED,
@@ -32,6 +33,7 @@ from livefire.fusion.objects import (
 )
 from livefire.fusion.tsdf import TSDFVolume
 from livefire.perception.material.types import MATERIAL_CLASSES, MaterialPrediction
+from livefire.perception.segment.base import load_segment_config
 from livefire.scene.builder import ViewInput, manual_material, snapshot_from_surfels
 from livefire.scene.snapshot import SceneSnapshot
 from livefire.scene.surfels import ViewPoints, bin_surfels
@@ -148,6 +150,26 @@ def _observes(calib: CameraCalibration, pos: np.ndarray, acc: AccumulatedDepth, 
     return int((ok & acc.valid[np.where(ok, v, 0), np.where(ok, u, 0)] & (np.abs(m - z) <= tol)).sum())
 
 
+def _segmenters(segmenters: Any, cals: dict[int, CameraCalibration]) -> dict[int, Any]:
+    """Per-camera segmentation backends: a ``{cam_id: backend}`` mapping or one shared backend."""
+    if isinstance(segmenters, Mapping):
+        missing = set(cals) - set(segmenters)
+        if missing:
+            raise ValueError(f"no segmentation backend for cameras {sorted(missing)}")
+        return {c: segmenters[c] for c in cals}
+    return {c: segmenters for c in cals}
+
+
+def keyframe_indices(n_frames: int, n_keyframes: int) -> list[int]:
+    """Indices of the ``n_keyframes`` frames nearest the middle of ``n_frames`` time-ordered frames (P3R2), nearest
+    first (ties: the earlier frame)."""
+    mid = (n_frames - 1) / 2.0
+    return sorted(range(n_frames), key=lambda i: (abs(i - mid), i))[: max(1, min(n_keyframes, n_frames))]
+
+
+_VIEW_STRIDE = 1000  # view id of keyframe k of camera c = c + _VIEW_STRIDE * k (k = 0 is the keyframe nearest the middle)
+
+
 def acquire_with_report(
     sources: Mapping[int, Any] | list[Any],
     calibration: Any,
@@ -157,18 +179,26 @@ def acquire_with_report(
     version: int = 1,
     device: str | None = None,
     progress: Callable[[str], None] | None = None,
+    segmenters: Mapping[int, Any] | Any | None = None,
 ) -> AcquisitionResult:
     """Acquire a frozen scene. ``sources``: started ``CameraSource`` objects (list or ``{cam_id: source}``);
     ``calibration``: ``calib.store.CalibrationSet`` or ``{cam_id: CameraCalibration}``; ``depth_backend``: a
     ``{cam_id: DepthBackend}`` mapping, a factory ``CameraCalibration -> DepthBackend`` or one shared backend; each
     camera's backend must already anchor depth to the table plane (``AnchoredDepthBackend``, P1R3) and return
     metric Z-depth. ``cfg`` = ``configs/acquisition.yaml: acquisition`` and ``grid_cfg`` = ``configs/grid.yaml``
-    (defaults loaded). ``progress`` (optional) receives short status strings from the calling thread. Raises
-    ``ReconstructionError`` if too few frames / no surface is found."""
+    (defaults loaded). ``progress`` (optional) receives short status strings from the calling thread.
+    ``segmenters`` (optional, P3-002): a ``{cam_id: SegmentationBackend}`` mapping or one shared backend. ``None`` (the
+    default) is the P1 geometric path, unchanged. With segmenters, ``segment.keyframes`` (``configs/segment.yaml``)
+    frames per camera nearest the middle of the window are segmented after depth accumulation (stage ``segment``),
+    instances are associated across views through the fused surfels and replace the geometric labels (stage
+    ``associate``, ``fusion/associate.py``); categories become ``WorldObject.name`` and ``category_hint``. A backend
+    raising ``SegmentationError`` is skipped with a warning (no segmenting camera: geometric path). Backends are
+    expected to be warmed up by the caller. Raises ``ReconstructionError`` if too few frames / no surface is found."""
     cfg = cfg or load_acquisition_config()
     grid_cfg = grid_cfg or load_yaml("grid")
     cals, undists = _cal_of(calibration)
     backends = _backends(depth_backend, cals)
+    seg_backends = _segmenters(segmenters, cals) if segmenters is not None else {}
     timings: dict[str, float] = {}
 
     @contextmanager
@@ -215,6 +245,19 @@ def acquire_with_report(
             "anchor_scale_spread": float(np.ptp(scales)) if scales else None,
         }
 
+    seg_views: dict[int, tuple[int, Any, Any]] = {}  # view id -> (camera, frame, SegmentationResult)
+    if seg_backends:
+        n_kf = int(cfg.get("segment", {}).get("keyframes") or load_segment_config()["keyframes"])
+        for c, fl in frames.items():
+            for k, i in enumerate(keyframe_indices(len(fl), n_kf)):
+                say(f"segmenting camera {c}, keyframe {k + 1}/{n_kf}")
+                try:
+                    with stage("segment"):
+                        seg_views[c + _VIEW_STRIDE * k] = (c, fl[i], seg_backends[c].segment(fl[i]))
+                except SegmentationError as e:
+                    warnings.append(f"segmentation failed on camera {c}: {e}")
+                    log.warning("segmentation failed on camera %d (%s); falling back to geometric labels", c, e)
+
     fr = cfg["fusion_roi"]
     roi_f = AABB(np.asarray(fr["min"], float), np.asarray(fr["max"], float))
     h = float(_val(cfg["voxel_size"]))
@@ -236,6 +279,21 @@ def acquire_with_report(
             warnings.append(f"table plane deviates {1e3 * plane.z_dev_m:.1f} mm from z = 0")
         lab = cluster_objects(sp.pos, sp.normal, sp.footprint, plane, cfg, s)
         keep = lab != DROPPED
+    assoc = None
+    if seg_views:
+        say("associating objects across views")
+        with stage("associate"):
+            vs = sorted(seg_views)
+            segs = {v: seg_views[v][2] for v in vs}
+            lbl = label_surfels(sp.pos[keep], {v: cals[seg_views[v][0]] for v in vs},
+                                {v: acc[seg_views[v][0]] for v in vs}, segs, cfg)  # fmt: skip
+            assoc = associate_objects(
+                lbl, lab[keep], {v: instance_colors(seg_views[v][1].rgb, segs[v].instance_ids) for v in vs}, cfg,
+                categories={v: segs[v].categories for v in vs}, area=sp.footprint[keep], pos=sp.pos[keep],
+            )  # fmt: skip
+            lab = lab.copy()
+            lab[keep] = assoc.labels
+            keep = lab != DROPPED
     say("building the scene snapshot")
     with stage("snapshot"):
         roi_g = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
@@ -245,11 +303,13 @@ def acquire_with_report(
         mats: dict[int, MaterialPrediction] = {}
         names: dict[int, str] = {}
         dm = str(cfg["default_object_material"])
+        cat_of = {o: (assoc.categories.get(o) or [None])[0] for o in ids} if assoc is not None else {}
         for o in ids:
             if o == TABLE_ID:
-                mats[o], names[o] = _prior("other_nonflammable", 1.0, False), "table"
+                mats[o], names[o] = _prior("other_nonflammable", 1.0, False, cat_of.get(o)), "table"
             else:
-                mats[o], names[o] = _prior(dm, float(cfg["default_object_confidence"]), True), f"object_{o}"
+                mats[o] = _prior(dm, float(cfg["default_object_confidence"]), True, cat_of.get(o))
+                names[o] = f"{cat_of[o]}_{o}" if cat_of.get(o) else f"object_{o}"
         views = {
             c: ViewInput(cals[c], acc[c].depth, acc[c].valid, np.full(acc[c].depth.shape, -1, np.int32))
             for c in cals
@@ -257,6 +317,10 @@ def acquire_with_report(
         obs: dict[int, dict[int, int]] = {}
         min_obs = int(cfg["min_view_observations"])
         for o in ids:
+            if assoc is not None and assoc.observations.get(o):  # per-camera instance ids (P3R3), nearest keyframe first
+                for v, inst in sorted(assoc.observations[o].items()):
+                    obs.setdefault(o, {}).setdefault(seg_views[v][0], inst)
+                continue
             p = sf.pos[sf.obj_id == o].astype(np.float64)
             obs[o] = {c: o for c in cals if _observes(cals[c], p, acc[c], max(2 * h, 0.02)) >= min(min_obs, len(p)) and len(p) > 0}
         snap = snapshot_from_surfels(sf, views, mats, grid_cfg, version, names, observations=obs)
@@ -277,20 +341,38 @@ def acquire_with_report(
                 int(o): {"name": names[o], "elements": int((snap.obj_id == o).sum()),
                          "area_m2": float(snap.area[snap.obj_id == o].sum()), "cameras": sorted(obs[o]),
                          "material": MATERIAL_CLASSES[snap.objects[o].material.material_id],
-                         "requires_review": snap.objects[o].material.requires_review}
+                         "requires_review": snap.objects[o].material.requires_review,
+                         **_assoc_report(assoc, o, obs[o])}
                 for o in ids
             },
             "timings_ms": timings,
             "acquisition_s": total_ms / 1e3,
         }
     )
+    if assoc is not None:
+        report["segmentation"] = {
+            "views": {v: seg_views[v][0] for v in sorted(seg_views)}, "n_instances": assoc.report["n_instances"],
+            "links": assoc.report["links"], "table_components": assoc.report["table_components"],
+        }  # fmt: skip
     return AcquisitionResult(snap, report, timings)
 
 
-def _prior(material: str, conf: float, review: bool) -> MaterialPrediction:
-    """One-hot category-prior material (source ``category_prior``)."""
+def _prior(material: str, conf: float, review: bool, category: str | None = None) -> MaterialPrediction:
+    """One-hot category-prior material (source ``category_prior``); ``category`` is the segmentation category hint."""
     m = manual_material(material)
-    return MaterialPrediction(m.class_probabilities, None, conf, "category_prior", review)
+    return MaterialPrediction(m.class_probabilities, category, conf, "category_prior", review)
+
+
+def _assoc_report(assoc: Any, o: int, obs: dict[int, int]) -> dict[str, Any]:
+    """Per-object report additions of the segmented path: ``observations`` (cam -> instance id), ``categories``,
+    ``source`` (``segmentation`` | ``geometric``) and ``unlabelled_fraction`` (surfels that kept the geometric label).
+    Empty for the geometric (P1) path, whose report is unchanged."""
+    if assoc is None:
+        return {}
+    r = assoc.report["objects"].get(o, {})
+    seg = bool(assoc.observations.get(o))
+    return {"observations": {int(c): int(i) for c, i in obs.items()}, "categories": list(assoc.categories.get(o, [])),
+            "source": "segmentation" if seg else "geometric", "unlabelled_fraction": r.get("unlabelled_fraction", 1.0)}  # fmt: skip
 
 
 def acquire_snapshot(

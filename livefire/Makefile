@@ -1,4 +1,4 @@
-.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval eval-acquire measure eval-placement eval-alignment eval-mae eval-latency
+.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike segment-spike plots calibrate eval eval-acquire measure eval-placement eval-alignment eval-mae eval-latency
 
 setup:
 	uv sync --all-groups --all-extras
@@ -27,6 +27,10 @@ bench:
 
 bench-spike:
 	uv run python bench/spike/run_spike.py
+
+# Segmentation model spike (P3-001, ADR-0007; needs `uv sync --all-extras`): writes bench/results/segment_spike_<cpu|gpu>_<date>.csv
+segment-spike:
+	uv run python bench/p3_segment_spike.py $(SEGMENT_ARGS)
 
 plots:
 	uv run python bench/plots.py

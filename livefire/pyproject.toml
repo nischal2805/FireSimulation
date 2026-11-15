@@ -17,9 +17,15 @@ dependencies = [
 spike = ["taichi"]
 # Monocular depth (P1-004, ADR-0005). Optional: core code imports without it. CPU wheels on Linux, CUDA 12.8 on Windows.
 depth = ["torch", "transformers", "pillow", "einops", "omegaconf"]
+# Segmentation and materials (P3, ADR-0007). Optional: core code and every fast test import without it.
+perception = ["torch", "torchvision", "transformers", "pillow"]  # torchvision: required by the SAM 2 image processor
 
 [tool.uv.sources]
 torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32'" },
+]
+torchvision = [
     { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cu128", marker = "sys_platform == 'win32'" },
 ]

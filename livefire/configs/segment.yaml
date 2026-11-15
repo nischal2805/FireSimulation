@@ -1,0 +1,44 @@
+# Keyframe instance segmentation (P3-001, ADR-0007; PRD 7.3, P3R1/P3R2).
+# `backend` selects the SegmentationBackend; weights are cached under `model_cache_dir` (gitignored).
+# Device comes from configs/app.yaml (`device`), never from here.
+backend: gdino_sam2                # oracle | gdino_sam2 | sam3 | mask2former
+model_cache_dir: data/models
+fp16_on_cuda: true                 # fp16 on CUDA; masks/scores are always host NumPy
+keyframes: 1                       # frames segmented per camera (nearest the middle of the acquisition window)
+vocabulary:                        # text prompts for the open-vocabulary backends (gdino_sam2, sam3)
+  - paper sheet
+  - cloth
+  - towel
+  - wooden block
+  - plastic bottle
+  - metal cup
+  - ceramic mug
+  - drinking glass
+  - book
+  - cardboard box
+  - table
+box_threshold: {value: 0.30, unit: "-", range: [0.05, 0.9], status: artistic}    # Grounding DINO / SAM 3 box score cut
+text_threshold: {value: 0.25, unit: "-", range: [0.05, 0.9], status: artistic}   # Grounding DINO text-token score cut
+mask_threshold: {value: 0.5, unit: "-", range: [0.05, 0.95], status: artistic}   # mask logit probability cut
+min_mask_area_px: 400              # masks smaller than this are dropped
+max_instances: 32                  # keep at most this many instances (highest score first)
+backends:
+  gdino_sam2:                      # primary candidate: open-vocabulary boxes + SAM 2.1 box-prompted masks
+    detector_hf_id: IDEA-Research/grounding-dino-tiny      # Apache-2.0, ungated
+    sam_hf_id: facebook/sam2.1-hiera-tiny                  # Apache-2.0, ungated (sam2.1-hiera-small is the larger option)
+  sam3:                            # gated (manual approval, Meta SAM License); needs an HF token
+    hf_id: facebook/sam3
+  mask2former:                     # closed-set COCO instances
+    hf_id: facebook/mask2former-swin-tiny-coco-instance
+oracle:                            # MOCK: exact obj_id render of the synthetic scene (tests only)
+  seed: 1234
+  erode_px: 1                      # 3x3 erosion iterations per mask (mimics imperfect model boundaries)
+  drop_prob: 0.0                   # probability that an object is dropped (missed detection)
+  permute_ids: true                # per-camera seeded permutation of instance ids (!= world obj_ids)
+# Synthetic-scene object name -> vocabulary phrase (oracle categories).
+category_map:
+  table: table
+  wood_block: wooden block
+  metal_box: metal cup
+  paper_sheet: paper sheet
+  cloth_patch: cloth

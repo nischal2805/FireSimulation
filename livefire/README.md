@@ -45,7 +45,7 @@ cd FireSimulation/livefire
 uv sync --all-groups --all-extras
 ```
 
-`--all-extras` installs the optional `spike` (Taichi) and `depth` (PyTorch + Transformers) extras. PyTorch comes from
+`--all-extras` installs the optional `spike` (Taichi), `depth` (PyTorch + Transformers) and `perception` (segmentation and materials: PyTorch, torchvision, Transformers) extras. PyTorch comes from
 the CUDA 12.8 wheel index on Windows and the CPU index on Linux (see `pyproject.toml`).
 
 **GPU:** set `device: "cuda:0"` in `configs/app.yaml` (default `cpu`). Never hard-code `cuda` in code.
@@ -80,6 +80,7 @@ column. No code path shells out to bash.
 | `make bench-spike` | `uv run python bench/spike/run_spike.py` | Warp vs Taichi kernel spike (decides ADR-0001) |
 | `make plots` | `uv run python bench/plots.py` | plots from the CSVs |
 | - | `uv run python bench/depth_spike.py` | depth model spike (ADR-0005) |
+| `make segment-spike` | `uv run python bench/p3_segment_spike.py` | segmentation model spike (ADR-0007; needs `uv sync --extra perception` or `--all-extras`; optional `--fetch-coco`) |
 | - | `uv run python -m livefire.app replay out/demo` | replay a recorded run and check its state digest |
 
 ## Cameras

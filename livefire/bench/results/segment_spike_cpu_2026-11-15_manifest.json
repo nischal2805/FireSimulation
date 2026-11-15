@@ -1,0 +1,58 @@
+{
+  "device": "cpu",
+  "candidates": {
+    "gdino_sam2": {
+      "status": "measured",
+      "load_s": 8.7
+    },
+    "sam3": {
+      "status": "skipped: gated"
+    },
+    "mask2former": {
+      "status": "measured",
+      "load_s": 4.5
+    }
+  },
+  "coco": {
+    "annotations": "COCO 2017 val instances, CC BY 4.0, https://cocodataset.org/#termsofuse",
+    "images": [
+      {
+        "file": "000000000632.jpg",
+        "flickr_url": "http://farm2.staticflickr.com/1241/1243324748_eea455da9f_z.jpg",
+        "license": "Attribution-NonCommercial-NoDerivs License",
+        "license_url": "http://creativecommons.org/licenses/by-nc-nd/2.0/"
+      },
+      {
+        "file": "000000000776.jpg",
+        "flickr_url": "http://farm2.staticflickr.com/1399/1488578517_9c6bfc45de_z.jpg",
+        "license": "Attribution-NonCommercial-ShareAlike License",
+        "license_url": "http://creativecommons.org/licenses/by-nc-sa/2.0/"
+      },
+      {
+        "file": "000000000802.jpg",
+        "flickr_url": "http://farm5.staticflickr.com/4031/4430589002_88e591d3e9_z.jpg",
+        "license": "Attribution-NoDerivs License",
+        "license_url": "http://creativecommons.org/licenses/by-nd/2.0/"
+      },
+      {
+        "file": "000000001268.jpg",
+        "flickr_url": "http://farm6.staticflickr.com/5454/9413846304_881d5e5c3b_z.jpg",
+        "license": "Attribution License",
+        "license_url": "http://creativecommons.org/licenses/by/2.0/"
+      },
+      {
+        "file": "000000001296.jpg",
+        "flickr_url": "http://farm5.staticflickr.com/4010/4690487654_90536a4a16_z.jpg",
+        "license": "Attribution-ShareAlike License",
+        "license_url": "http://creativecommons.org/licenses/by-sa/2.0/"
+      },
+      {
+        "file": "000000001353.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2683/4205117799_327d7e77ee_z.jpg",
+        "license": "Attribution-NonCommercial-NoDerivs License",
+        "license_url": "http://creativecommons.org/licenses/by-nc-nd/2.0/"
+      }
+    ]
+  },
+  "note": "merged from two runs on the same day (gdino_sam2 after installing torchvision; sam3 gated; mask2former from the first run)"
+}

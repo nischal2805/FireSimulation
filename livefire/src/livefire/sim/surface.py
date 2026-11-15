@@ -15,6 +15,7 @@ from livefire.common.config import Params
 from livefire.scene.snapshot import SceneSnapshot
 from livefire.sim.device import select_device, to_device
 from livefire.sim.materials import MaterialTable
+from livefire.sim.radiation import RadiationModel
 from livefire.sim.state import FireStateHost
 
 SIGMA = 5.670374419e-8  # W/(m^2 K^4)
@@ -32,6 +33,7 @@ def thermal_kernel(
     area: wp.array(dtype=wp.float64),
     eps: wp.array(dtype=wp.float64),
     q_fb: wp.array(dtype=wp.float64),
+    q_rad: wp.array(dtype=wp.float64),
     burning: wp.array(dtype=wp.uint8),
     clamps: wp.array(dtype=wp.int32),
     h_c: wp.float64,
@@ -46,7 +48,7 @@ def thermal_kernel(
     sig = _F64(SIGMA)
     t4 = ti * ti * ti * ti
     ta4 = t_amb * t_amb * t_amb * t_amb
-    q = h_c * (_F64(t_gas[i]) - ti) - eps[i] * sig * (t4 - ta4)
+    q = h_c * (_F64(t_gas[i]) - ti) - eps[i] * sig * (t4 - ta4) + q_rad[i]  # q_rad: absorbed radiation (P2-001)
     if burning[i] != wp.uint8(0):
         q += q_fb[i]  # full q_fb even on the burnout step (partial consumption): small, accepted overestimate
     p = _F64(0.0)
@@ -127,6 +129,28 @@ def combustion_kernel(
             removed[i] = c
 
 
+@wp.kernel
+def rad_deduct_kernel(
+    heat_w: wp.array(dtype=wp.float32),
+    w_all: wp.array(dtype=wp.float64),
+    sum_w: wp.array(dtype=wp.float64),
+    p_rx: wp.array(dtype=wp.float64),
+    deficit: wp.array(dtype=wp.float64),
+    dt: wp.float64,
+):
+    """P2R3: take the absorbed radiated power out of the emitters' gas share, proportional to w_b, clamped >= 0."""
+    i = wp.tid()
+    w = w_all[i]
+    if w <= _F64(0.0) or sum_w[0] <= _F64(0.0):
+        return
+    share = p_rx[0] * w / sum_w[0]
+    h = _F64(heat_w[i])
+    if share > h:
+        wp.atomic_add(deficit, 0, (share - h) * dt)
+        share = h
+    heat_w[i] = wp.float32(h - share)
+
+
 class SurfaceFireModel:
     """Surface thermal/ignition/combustion/char model for N_e surface elements.
 
@@ -150,6 +174,7 @@ class SurfaceFireModel:
         self._area_h = np.asarray(snapshot.area, dtype=np.float64)
         self._nb_h = np.asarray(snapshot.neighbors, dtype=np.int32)
         self._spacing = float(snapshot.surfel_spacing)
+        self._roi = snapshot.roi
         self._p = {k: params[k] for k in params.keys()}  # noqa: SIM118 (Params is not iterable)
         d = self.device
         self.area = to_device(self._area_h, wp.float64, d)
@@ -158,6 +183,8 @@ class SurfaceFireModel:
         self.heat_W = wp.zeros(self.n, dtype=wp.float32, device=d)
         self.soot_kg_s = wp.zeros(self.n, dtype=wp.float32, device=d)
         self.power_W = wp.zeros(self.n, dtype=wp.float32, device=d)
+        self.q_rad = wp.zeros(self.n, dtype=wp.float64, device=d)
+        self.rad_deficit_J = wp.zeros(1, dtype=wp.float64, device=d)
         self.t_sim = 0.0
         self.step_count = 0
         self.last_substeps = 0
@@ -181,6 +208,9 @@ class SurfaceFireModel:
         self.m0, self.m_res = f64(m.m0), f64(m.m_res)
         self.t_ign, self.t_delay, self.mdot_ref = f64(m.T_ign), f64(m.t_delay), f64(m.mdot_ref)
         self.dh, self.chi, self.y_soot = f64(m.dH), f64(m.chi), f64(m.y_soot)
+        self.radiation = RadiationModel(
+            self.pos, self.normal, self._area_h, np.asarray(m.eps)[ids], np.asarray(m.consumed)[ids], self._roi, self.params, d
+        )
         self.q_fb = f64(p["f_feedback"] * m.chi * m.dH * m.mdot_ref)
         self._t_delay_h = np.asarray(m.t_delay)[ids]
         self._m0_h = np.asarray(m.m0)[ids]
@@ -220,6 +250,8 @@ class SurfaceFireModel:
         self.removed = wp.zeros(self.n, dtype=wp.float64, device=d)
         self.burning = wp.zeros(self.n, dtype=wp.uint8, device=d)
         self.clamp_count.zero_()
+        self.rad_deficit_J.zero_()
+        self.q_rad.zero_()
         self.t_sim, self.step_count, self.last_substeps, self.max_substeps = 0.0, 0, 0, 0
 
     # ---- interface ------------------------------------------------------------------------
@@ -247,6 +279,21 @@ class SurfaceFireModel:
         """Number of thermal sub-steps used for a step of ``dt`` seconds."""
         return max(1, math.ceil(dt / min(self.dt_cond_max, self.dt_conv_max) - 1e-9))
 
+    def compute_radiation(self) -> wp.array:
+        """Fill and return the model-owned ``q_rad`` (N,) float64 device array [W/m^2 absorbed] from the current
+        ``burning`` / ``T_s`` (mode from ``rad_mode``; mode 0 gives zeros). Overwritten by the next call."""
+        self.radiation.compute(self.burning, self.T_s, self.q_rad)
+        return self.q_rad
+
+    def radiation_stats(self) -> dict[str, float]:
+        """Radiation counters (syncs): emitters (or active cells) of the last step, cumulative overflow, absorbed
+        power [W] of the last step, cumulative energy not deducted because of the heat_W >= 0 clamp [J]."""
+        r = self.radiation
+        return {
+            "rad_emitters": r.last_emitters, "rad_overflow": r.overflow_count, "rad_absorbed_W": r.last_absorbed_W,
+            "rad_deficit_J": float(self.rad_deficit_J.numpy()[0]),
+        }  # fmt: skip
+
     def step(self, dt: float, T_g_sample: wp.array) -> tuple[wp.array, wp.array]:
         """Advance ``dt`` [s]. ``T_g_sample`` (N,) float32 [K], on the model device, is the gas
         temperature at :meth:`sample_points`. Returns ``(heat_W, soot_kg_s)``: float32 (N,) device
@@ -254,11 +301,12 @@ class SurfaceFireModel:
         p, d = self._p, self.device
         n_sub = self.substeps_for(dt)
         h = dt / n_sub
+        self.compute_radiation()  # once per step, before the thermal sub-steps (P2R2)
         for _ in range(n_sub):
             wp.launch(
                 thermal_kernel, dim=self.n, device=d,
                 inputs=[self.T_s, self._T_tmp, T_g_sample, self.nb, self.G, self.Cap, self.area, self.eps,
-                        self.q_fb, self.burning, self.clamp_count, p["h_c"], p["T_amb"], p["T_s_min"],
+                        self.q_fb, self.q_rad, self.burning, self.clamp_count, p["h_c"], p["T_amb"], p["T_s_min"],
                         p["T_s_max"], h, self.nb.shape[1]],
             )  # fmt: skip
             self.T_s, self._T_tmp = self._T_tmp, self.T_s
@@ -269,6 +317,10 @@ class SurfaceFireModel:
                     self.mdot_ref, self.dh, self.chi, self.y_soot, self.heat_W, self.soot_kg_s, self.power_W,
                     p["ignition_decay"], p["f_feedback"], p["eps_m"], dt],
         )  # fmt: skip
+        if self.radiation.mode != 0:
+            r = self.radiation
+            wp.launch(rad_deduct_kernel, dim=self.n, device=d,
+                      inputs=[self.heat_W, r.w_all, r.sum_w, r.p_rx, self.rad_deficit_J, dt])  # fmt: skip
         self.last_substeps = n_sub
         self.max_substeps = max(self.max_substeps, n_sub)
         self.t_sim += dt

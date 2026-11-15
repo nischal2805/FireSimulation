@@ -1,4 +1,4 @@
-.PHONY: interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: bench-radiation interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -24,6 +24,9 @@ run-rt:
 
 bench:
 	uv run python bench/run_bench.py
+
+bench-radiation:
+	uv run python bench/p2_radiation_compare.py
 
 bench-spike:
 	uv run python bench/spike/run_spike.py

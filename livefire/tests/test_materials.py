@@ -19,7 +19,16 @@ def _dump(tmp_path, d):
 
 def test_ids_and_derived():
     t = MaterialTable.load(config_dir() / "materials.yaml")
-    assert MATERIAL_CLASSES == ("paper", "cloth", "wood", "plastic", "metal", "glass", "ceramic", "other_nonflammable")
+    assert MATERIAL_CLASSES == (
+        "paper",
+        "cloth",
+        "wood",
+        "plastic",
+        "metal",
+        "glass",
+        "ceramic",
+        "other_nonflammable",
+    )
     assert [t.material_id(n) for n in MATERIAL_CLASSES] == list(range(8))
     assert t.flammable.tolist() == [True] * 4 + [False] * 4
     assert t.m_res[0] == 0.0
@@ -69,3 +78,30 @@ def test_missing_common_field_and_bad_order(tmp_path, raw):
 def test_missing_file(tmp_path):
     with pytest.raises(ConfigError):
         MaterialTable.load(tmp_path / "nope.yaml")
+
+
+def test_status_detail_present_for_every_material_and_valid():
+    t = MaterialTable.load()
+    for name, d in zip(MATERIAL_CLASSES, t.status_detail, strict=True):
+        assert d, f"{name}: status_detail missing"
+        assert set(d) <= {"thermal", "ignition", "combustion", "radiation"}
+        assert set(d.values()) <= {"physical_estimate", "artistic"}
+        assert {"thermal", "radiation"} <= set(d)
+
+
+def test_status_detail_absent_is_accepted(tmp_path, raw):
+    for e in raw.values():
+        e.pop("status_detail", None)
+    t = MaterialTable.load(_dump(tmp_path, raw))
+    assert t.status_detail == [{}] * 8
+
+
+@pytest.mark.parametrize("detail,match", [
+    ({"thermal": "artistic", "bogus": "artistic"}, "bogus"),
+    ({"thermal": "measured"}, "thermal"),
+    ("artistic", "status_detail"),
+])  # fmt: skip
+def test_status_detail_invalid_rejected(tmp_path, raw, detail, match):
+    raw["wood"]["status_detail"] = detail
+    with pytest.raises(ConfigError, match=match):
+        MaterialTable.load(_dump(tmp_path, raw))

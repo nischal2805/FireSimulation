@@ -1,11 +1,18 @@
 # units: m0_areal [kg/m^2], delta [m], rho [kg/m^3], c [J/(kg K)], k [W/(m K)],
 #        T_ign [K], t_delay [s], mdot_ref [kg/(m^2 s)], dH [J/kg], chi [-],
 #        char_yield [-], y_soot [kg/kg], eps [-]
-paper:   {status: physical_estimate, flammable: true,  m0_areal: 0.08, delta: 1.0e-4, rho: 800, c: 1340, k: 0.1,  T_ign: 505, t_delay: 0.2, mdot_ref: 0.012, dH: 1.4e7, chi: 0.6, char_yield: 0.0,  y_soot: 0.01, eps: 0.9, consumed_when_burnt: true}
-cloth:   {status: physical_estimate, flammable: true,  m0_areal: 0.20, delta: 4.0e-4, rho: 500, c: 1300, k: 0.06, T_ign: 520, t_delay: 0.4, mdot_ref: 0.008, dH: 1.6e7, chi: 0.6, char_yield: 0.05, y_soot: 0.02, eps: 0.9, consumed_when_burnt: true}
-wood:    {status: physical_estimate, flammable: true,  m0_areal: 3.0,  delta: 5.0e-3, rho: 600, c: 1700, k: 0.15, T_ign: 570, t_delay: 1.5, mdot_ref: 0.010, dH: 1.3e7, chi: 0.6, char_yield: 0.15, y_soot: 0.015, eps: 0.9, consumed_when_burnt: false}
-plastic: {status: artistic,          flammable: true,  m0_areal: 0.5,  delta: 1.0e-3, rho: 1000, c: 1900, k: 0.2, T_ign: 600, t_delay: 1.0, mdot_ref: 0.010, dH: 2.2e7, chi: 0.6, char_yield: 0.05, y_soot: 0.08, eps: 0.9, consumed_when_burnt: false}
-metal:   {status: physical_estimate, flammable: false, rho: 7800, c: 500, k: 50, delta: 2.0e-3, eps: 0.3}
-glass:   {status: physical_estimate, flammable: false, rho: 2500, c: 840, k: 1.0, delta: 3.0e-3, eps: 0.9}
-ceramic: {status: physical_estimate, flammable: false, rho: 2400, c: 900, k: 1.5, delta: 5.0e-3, eps: 0.9}
-other_nonflammable: {status: artistic, flammable: false, rho: 1500, c: 1000, k: 0.5, delta: 3.0e-3, eps: 0.9}
+#
+# status (PRD 8.5) is the overall label; status_detail (P2-002, additive, optional) labels the parameter groups:
+#   thermal = rho, c, k, delta;  ignition = T_ign, t_delay;  combustion = m0_areal, mdot_ref, dH, chi, char_yield,
+#   y_soot, consumed_when_burnt;  radiation = eps.   Values: physical_estimate | artistic.
+# physical_estimate means an order of magnitude from memory, verify before citing (PRD 8.1); no value here is a
+# measurement. Per-group source notes: docs/NUMERICAL_METHODS.md, "Parameter audit". A group holding any tuned
+# value (t_delay, mdot_ref, chi, char_yield, y_soot) is labelled artistic.
+paper:   {status: physical_estimate, flammable: true,  m0_areal: 0.08, delta: 1.0e-4, rho: 800, c: 1340, k: 0.1,  T_ign: 505, t_delay: 0.2, mdot_ref: 0.012, dH: 1.4e7, chi: 0.6, char_yield: 0.0,  y_soot: 0.01, eps: 0.9, consumed_when_burnt: true, status_detail: {thermal: physical_estimate, ignition: artistic, combustion: artistic, radiation: physical_estimate}}
+cloth:   {status: physical_estimate, flammable: true,  m0_areal: 0.20, delta: 4.0e-4, rho: 500, c: 1300, k: 0.06, T_ign: 520, t_delay: 0.4, mdot_ref: 0.008, dH: 1.6e7, chi: 0.6, char_yield: 0.05, y_soot: 0.02, eps: 0.9, consumed_when_burnt: true, status_detail: {thermal: physical_estimate, ignition: artistic, combustion: artistic, radiation: physical_estimate}}
+wood:    {status: physical_estimate, flammable: true,  m0_areal: 3.0,  delta: 5.0e-3, rho: 600, c: 1700, k: 0.15, T_ign: 570, t_delay: 1.5, mdot_ref: 0.010, dH: 1.3e7, chi: 0.6, char_yield: 0.15, y_soot: 0.015, eps: 0.9, consumed_when_burnt: false, status_detail: {thermal: physical_estimate, ignition: artistic, combustion: artistic, radiation: physical_estimate}}
+plastic: {status: artistic,          flammable: true,  m0_areal: 0.5,  delta: 1.0e-3, rho: 1000, c: 1900, k: 0.2, T_ign: 600, t_delay: 1.0, mdot_ref: 0.010, dH: 2.2e7, chi: 0.6, char_yield: 0.05, y_soot: 0.08, eps: 0.9, consumed_when_burnt: false, status_detail: {thermal: artistic, ignition: artistic, combustion: artistic, radiation: physical_estimate}}
+metal:   {status: physical_estimate, flammable: false, rho: 7800, c: 500, k: 50, delta: 2.0e-3, eps: 0.3, status_detail: {thermal: physical_estimate, radiation: physical_estimate}}
+glass:   {status: physical_estimate, flammable: false, rho: 2500, c: 840, k: 1.0, delta: 3.0e-3, eps: 0.9, status_detail: {thermal: physical_estimate, radiation: physical_estimate}}
+ceramic: {status: physical_estimate, flammable: false, rho: 2400, c: 900, k: 1.5, delta: 5.0e-3, eps: 0.9, status_detail: {thermal: physical_estimate, radiation: physical_estimate}}
+other_nonflammable: {status: artistic, flammable: false, rho: 1500, c: 1000, k: 0.5, delta: 3.0e-3, eps: 0.9, status_detail: {thermal: artistic, radiation: artistic}}

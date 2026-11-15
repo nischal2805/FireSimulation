@@ -50,6 +50,26 @@ These are not in the PRD and are the code's behaviour.
   classes). Read through `sim/materials.py`, which derives `m_res = m0 * char_yield`.
 - `configs/grid.yaml`: ROI (`roi_min`, `roi_max`), gas grid `G`, surfel spacing, neighbour radius and cap.
 
+## Parameter audit
+
+PRD 8.1 / P2R8. Every `configs/sim.yaml` entry has a unit and a status; every material has a per-group
+`status_detail` in `configs/materials.yaml` (checked by `tests/test_thermal_audit.py::test_sim_yaml_audit` and
+`tests/test_materials.py`). `physical_estimate` here means an order of magnitude from memory, to be verified before
+it is cited; nothing in the repository is a measurement. `artistic` values carry no physical claim.
+
+| Parameter group | Where | Unit | Status | Source note |
+| --- | --- | --- | --- | --- |
+| Ambient `T_amb`, gas `rho_g`, `c_p`, `g` | sim.yaml | K, kg/m^3, J/(kg K), m/s^2 | physical_estimate | standard room air values, from memory |
+| Convection `h_c` | sim.yaml | W/(m^2 K) | physical_estimate | natural-convection order of magnitude (5-25), from memory, verify |
+| Feedback split `f_feedback`, `T_pilot`, `ignite_radius`, `ignition_decay`, `eps_m`, `T_s_min`, `T_s_max` | sim.yaml | -, K, m, 1/s, kg/m^2, K | artistic | tuned for look (ADR-0003) |
+| Gas solver `eps_vc`, `k_cool`, `k_soot`, `T_g_max`, `cfl_max`, `n_iters`, `wind_speed`, `wind_noise` | sim.yaml | -, 1/s, K, m/s | artistic | tuned; clamps counted (ADR-0003) |
+| Flame field `k_flame` | sim.yaml | 1/s | artistic | ADR-0004 |
+| Radiation `rad_mode`, `eps_f`, `T_rad_flame`, `rad_R`, `rad_r_min`, `rad_cell`, `rad_max_emitters` | sim.yaml | -, -, K, m, m, m, - | artistic | ADR-0006; flame emissivity and temperature are look parameters, the geometry (cos, 1/r^2) is textbook view-factor form |
+| Material thermal group (`rho`, `c`, `k`, `delta`) | materials.yaml | kg/m^3, J/(kg K), W/(m K), m | physical_estimate for paper, cloth, wood, metal, glass, ceramic; artistic for plastic, other_nonflammable | handbook order of magnitude from memory, verify; plastic is a generic stand-in |
+| Material ignition group (`T_ign`, `t_delay`) | materials.yaml | K, s | artistic (all flammables) | `T_ign` is an order of magnitude from memory (verify), but `t_delay` is tuned, so the group is artistic |
+| Material combustion group (`m0_areal`, `mdot_ref`, `dH`, `chi`, `char_yield`, `y_soot`, `consumed_when_burnt`) | materials.yaml | kg/m^2, kg/(m^2 s), J/kg, -, -, kg/kg | artistic (all flammables) | `m0_areal` and `dH` are order-of-magnitude values, but `mdot_ref`, `chi`, `char_yield`, `y_soot` are tuned, so the group is artistic |
+| Material radiation group (`eps`) | materials.yaml | - | physical_estimate (artistic for other_nonflammable) | emissivity of non-metals about 0.9 and of metal about 0.3, from memory, verify |
+
 ## Invariants and tests
 
 The PRD 8.6 invariants are tested in `tests/test_surface_invariants.py`, `tests/test_gas.py` and

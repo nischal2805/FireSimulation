@@ -2,7 +2,7 @@
 
 Usage: python bench/run_bench.py [--quick] [--device cpu|cuda:0] [--out CSV]
 Device defaults to configs/app.yaml `device`. CPU rows are labelled gpu=none, framework=warp-<ver>-cpu.
-Workloads are defined in bench/workloads.yaml (workload_version 1). Run with nothing else running.
+Workloads are defined in bench/workloads.yaml (workload_version 2). Run with nothing else running.
 """
 
 from __future__ import annotations

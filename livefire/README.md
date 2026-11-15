@@ -68,6 +68,7 @@ column. No code path shells out to bash.
 | `make latency-timer` | `uv run python -m livefire.app latency-timer` | on-screen ms counter for glass-to-glass latency |
 | `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` | print-ready board (other `calib` subcommands below) |
 | `make bench` | `uv run python bench/run_bench.py` | benchmarks to `bench/results/*.csv` |
+| `make bench-radiation` | `uv run python bench/p2_radiation_compare.py` | radiation modes 0/1/2: cost CSV `bench/results/radiation_cpu_<date>.csv` and spread CSV `eval/results/radiation_effect_<date>.csv` (ADR-0006; about 20 min on CPU, `--quick` for a smoke run) |
 | `make bench-spike` | `uv run python bench/spike/run_spike.py` | Warp vs Taichi kernel spike (decides ADR-0001) |
 | `make plots` | `uv run python bench/plots.py` | plots from the CSVs |
 | - | `uv run python bench/depth_spike.py` | depth model spike (ADR-0005) |

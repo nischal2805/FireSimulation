@@ -251,6 +251,7 @@ class SurfaceFireModel:
         self.burning = wp.zeros(self.n, dtype=wp.uint8, device=d)
         self.clamp_count.zero_()
         self.rad_deficit_J.zero_()
+        self.radiation.overflow.zero_()
         self.q_rad.zero_()
         self.t_sim, self.step_count, self.last_substeps, self.max_substeps = 0.0, 0, 0, 0
 

@@ -28,3 +28,13 @@ wind_noise: {value: 0.0,   unit: "m/s",       range: [0, 1],        status: arti
 
 # --- combustion-intensity field (P0-008b, ADR-0004)
 k_flame:    {value: 6.0,   unit: "1/s",       range: [0.5, 50],      status: artistic}
+
+# --- radiation (P2-001, PRD 8.2, ADR-0006)
+# rad_mode: 0 = local only (conv + cond), 1 = coarse emission grid, 2 = bounded gather over burning elements
+rad_mode:         {value: 0,     unit: "-",   range: [0, 2],          status: artistic}
+eps_f:            {value: 0.7,   unit: "-",   range: [0, 1],          status: artistic}
+T_rad_flame:      {value: 1100,  unit: "K",   range: [600, 2000],     status: artistic}
+rad_R:            {value: 0.30,  unit: "m",   range: [0.02, 1.5],     status: artistic}
+rad_r_min:        {value: 0.01,  unit: "m",   range: [0.001, 0.1],    status: artistic}
+rad_cell:         {value: 0.05,  unit: "m",   range: [0.01, 0.3],     status: artistic}
+rad_max_emitters: {value: 8192,  unit: "-",   range: [16, 1.0e6],     status: artistic}

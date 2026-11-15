@@ -214,6 +214,7 @@ class FireSimulation:
             "t_sim": self.t_sim,
             "rt_factor": sum(s for s, _ in self._window) / wall if wall > 0 else 0.0,
             "sim_lag_s": self._acc,
+            **self.surface.radiation_stats(),
         }
 
     # ---- FireStateView ----------------------------------------------------------------------

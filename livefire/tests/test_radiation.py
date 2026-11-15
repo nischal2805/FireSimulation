@@ -143,21 +143,103 @@ def test_mode1_vs_mode2_and_mode0(table):
 
 
 def test_energy_budget_p2r3(snap, table):
+    """Per element and over several steps: heat_W(mode 0) - heat_W(mode 2) == P_rx * w_b / sum(w) for emitters.
+    The paper burning set is identical in both twins until the cloth ignites (> 3 s) and the paper burns out
+    (> 6 s), so 20 steps of 0.05 s (1 s) compare like with like; T_g is held at ambient."""
     dt = 0.05
     tg = dev_arr(np.full(len(snap.pos), 293.15, np.float32), wp.float32)
-    out = {}
-    for mode in (0, 2):
-        m = SurfaceFireModel(snap, table, sim_params(rad_mode=mode), DEV)
+    m0 = SurfaceFireModel(snap, table, sim_params(rad_mode=0), DEV)
+    m2 = SurfaceFireModel(snap, table, sim_params(rad_mode=2), DEV)
+    for m in (m0, m2):
         assert m.ignite(np.array([-0.075, 0.0, 0.1]), radius=0.15) > 0
-        m.step(dt, tg)
-        out[mode] = (m.heat_W.numpy().astype(np.float64).sum(), m)
-    h0 = out[0][0]
-    m2 = out[2][1]
-    st = m2.radiation_stats()
-    assert st["rad_absorbed_W"] > 0
-    assert out[2][0] * dt + st["rad_absorbed_W"] * dt == pytest.approx(h0 * dt, rel=1e-6)
-    assert st["rad_deficit_J"] == 0.0
+    for _ in range(20):
+        m0.step(dt, tg)
+        m2.step(dt, tg)
+        r = m2.radiation
+        w, sum_w, p_rx = r.w_all.numpy(), float(r.sum_w.numpy()[0]), r.last_absorbed_W
+        assert p_rx > 0 and sum_w > 0
+        h0, h2 = m0.heat_W.numpy().astype(np.float64), m2.heat_W.numpy().astype(np.float64)
+        assert np.array_equal(m0.burning.numpy() > 0, m2.burning.numpy() > 0)
+        np.testing.assert_allclose(h0 - h2, p_rx * w / sum_w, rtol=0, atol=1e-6 * h0.max())
+        assert h0.sum() * dt == pytest.approx((h2.sum() + p_rx) * dt, rel=1e-6)
+        assert m2.radiation_stats()["rad_deficit_J"] == 0.0
     assert m2.clamp_events() == 0
+
+
+def _model(mode, pos, nrm, eps=0.9, two=True, roi=1.0, **over):
+    n = len(pos)
+    return RadiationModel(pos, nrm, np.full(n, S * S), np.full(n, eps), np.full(n, two),
+                          AABB(np.zeros(3), np.full(3, roi)), sim_params(rad_mode=mode, **over), DEV)  # fmt: skip
+
+
+def _q(m, burning, t=600.0):
+    n = len(burning)
+    out = wp.zeros(n, dtype=wp.float64, device=DEV)
+    m.compute(dev_arr(burning, wp.uint8), dev_arr(np.full(n, t), wp.float64), out)
+    return out.numpy()
+
+
+def test_mode1_burning_receivers_in_burning_cells(table):
+    """Self-cell subtraction. A lone burning element receives nothing from itself; an L-corner of two burning
+    perpendicular sheets (every cell holds emitters, all receivers burning) agrees with mode 2 in total absorbed
+    power within 25 % (mode 1 is inaccurate within ~1 rad_cell)."""
+    one = np.array([[0.5, 0.5, 0.5], [0.58, 0.5, 0.5]])
+    nrm1 = np.array([[0.0, 0, 1], [0.0, 0, 1]])
+    q = _q(_model(1, one, nrm1), np.array([1, 0], np.uint8))
+    assert q[0] == 0.0 and q[1] == 0.0  # coplanar receiver: cos = 0; self excluded
+    one[1] = [0.58, 0.5, 0.55]
+    nrm1[1] = [1.0, 0, 0]
+    q = _q(_model(1, one, nrm1), np.array([1, 0], np.uint8))
+    assert q[0] == 0.0 and q[1] > 0.0
+    n = 10
+    g = np.array([(0.4 + i * S, 0.4 + j * S) for j in range(n) for i in range(n)])
+    burning = np.ones(200, np.uint8)
+    # (i) two parallel burning sheets 0.15 m apart: every receiver sits in a burning cell
+    pos, nrm = _sheets()
+    q1, q2 = _q(_model(1, pos, nrm), burning), _q(_model(2, pos, nrm), burning)
+    assert q2.sum() > 0 and q1.sum() == pytest.approx(q2.sum(), rel=0.15)
+    # (ii) perpendicular burning sheets (horizontal z = 0.4, vertical x = 0.7), gap > 1 cell
+    horiz = np.c_[g, np.full(100, 0.4)]
+    vert = np.c_[np.full(100, 0.7), g[:, 0], g[:, 1] - 0.1]
+    pos = np.r_[horiz, vert]
+    nrm = np.r_[np.tile([0.0, 0, 1], (100, 1)), np.tile([1.0, 0, 0], (100, 1))]
+    q1, q2 = _q(_model(1, pos, nrm), burning), _q(_model(2, pos, nrm), burning)
+    assert q2.sum() > 0 and q1.sum() == pytest.approx(q2.sum(), rel=0.25)
+    # (iii) near field (L-corner, adjacent elements share cells): mode 1 is only qualitative within ~1 rad_cell
+    vert = np.c_[np.full(100, 0.4), g[:, 0], g[:, 1]]
+    pos = np.r_[horiz, vert]
+    q1 = _q(_model(1, pos, nrm), burning)
+    assert np.isfinite(q1).all() and q1.sum() > 0
+
+
+def test_mode1_cell_cap_overflow(table):
+    pos, nrm = _sheets()
+    burning = np.r_[np.ones(100), np.zeros(100)].astype(np.uint8)
+    m = _model(1, pos, nrm, rad_max_emitters=16, rad_cell=0.02)
+    q = _q(m, burning)
+    assert m.overflow_count > 0 and m.last_emitters > 16
+    assert np.isfinite(q).all() and q.sum() > 0
+
+
+def test_mode1_one_sided_and_cutoff_match_mode2(table):
+    for mat in ("paper", "wood"):
+        for n_rec in ([0, 0, -1], [0, 0, 1], [0, -0.6, -0.8]):
+            q1, *_ = pair_q(table, [0, 0, 0.1], n_rec, rec_mat=mat, mode=1)
+            q2, *_ = pair_q(table, [0, 0, 0.1], n_rec, rec_mat=mat, mode=2)
+            assert q1 == pytest.approx(q2, rel=1e-9, abs=0.0)
+    assert pair_q(table, [0, 0, 0.1], [0, 0, 1], rec_mat="wood", mode=1)[0] == 0.0
+    assert pair_q(table, [0, 0, 0.1], [0, 0, 1], rec_mat="paper", mode=1)[0] > 0.0
+    assert pair_q(table, [0, 0, 0.31], [0, 0, -1], mode=1)[0] == 0.0  # beyond rad_R (centroid distance)
+    assert pair_q(table, [0, 0, 0.29], [0, 0, -1], mode=1)[0] > 0.0
+
+
+def test_reset_clears_overflow(snap, table):
+    m = SurfaceFireModel(snap, table, sim_params(rad_mode=2, rad_max_emitters=16), DEV)
+    m.ignite(np.array([-0.075, 0.0, 0.1]), radius=0.15)
+    m.step(0.05, dev_arr(np.full(m.n, 293.15, np.float32), wp.float32))
+    assert m.radiation_stats()["rad_overflow"] > 0
+    m.reset()
+    assert m.radiation_stats()["rad_overflow"] == 0
 
 
 def _spread(snap, table, mode, t_end=30.0, dt=0.05):

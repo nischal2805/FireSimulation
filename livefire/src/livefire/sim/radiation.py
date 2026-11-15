@@ -118,7 +118,7 @@ def _gather_elements_k(
         dy = pos[j, 1] - py
         dz = pos[j, 2] - pz
         r2 = dx * dx + dy * dy + dz * dz
-        if r2 > r_max2 or r2 <= _F64(0.0):
+        if r2 > r_max2 or r2 <= _F64(1.0e-18):  # coincident points: direction undefined (round-off noise)
             continue
         r = wp.sqrt(r2)
         ci = (nx * dx + ny * dy + nz * dz) / r
@@ -238,7 +238,7 @@ def _gather_cells_k(
         dy = sy / w - py
         dz = sz / w - pz
         r2 = dx * dx + dy * dy + dz * dz
-        if r2 > r_max2 or r2 <= _F64(0.0):
+        if r2 > r_max2 or r2 <= _F64(1.0e-18):  # coincident points: direction undefined (round-off noise)
             continue
         r = wp.sqrt(r2)
         ci = (nx * dx + ny * dy + nz * dz) / r
@@ -309,7 +309,7 @@ class RadiationModel:
         self._count = wp.zeros(1, dtype=wp.int32, device=d)
         self._flags = wp.zeros(max(n, 1), dtype=wp.int32, device=d)
         self._offs = wp.zeros(max(n, 1), dtype=wp.int32, device=d)
-        self._list = wp.zeros(self.cap, dtype=wp.int32, device=d)
+        self._list = wp.zeros(max(1, min(self.cap, n)), dtype=wp.int32, device=d)  # mode 2: emitter ids
         if self.mode == 1:
             lo = np.asarray(roi.min, dtype=np.float64)
             ext = np.asarray(roi.max, dtype=np.float64) - lo
@@ -325,6 +325,7 @@ class RadiationModel:
             self._cm = wp.zeros((nc, 6), dtype=wp.float64, device=d)
             self._cflags = wp.zeros(nc, dtype=wp.int32, device=d)
             self._coffs = wp.zeros(nc, dtype=wp.int32, device=d)
+            self._list = wp.zeros(max(1, min(self.cap, nc)), dtype=wp.int32, device=d)  # mode 1: active cell ids
 
     def compute(self, burning: wp.array, T_s: wp.array, out_q: wp.array) -> None:
         """Fill ``out_q`` (N,) float64 [W/m^2 absorbed] from ``burning`` (N,) uint8 and ``T_s`` (N,) float64 [K]

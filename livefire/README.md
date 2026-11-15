@@ -24,7 +24,7 @@ treat the GPU and Windows paths as untested.
 | Feature | Command |
 | --- | --- |
 | Click on the synthetic scene to start fires | `uv run python -m livefire.app interactive --scene table_v1` |
-| Offline two-view fire demo video | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
+| Offline two-view fire demo video | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.08"` |
 | See your cameras (fps, frame age, skew, status) and record clips | `uv run python -m livefire.app capture` (add `--record data/clips/run1 --seconds 10`) |
 | Print and use the calibration board | `uv run python -m livefire.app calib board --out board.png --dpi 300` |
 
@@ -60,15 +60,17 @@ column. No code path shells out to bash.
 | `make test` | `uv run pytest -m "not slow" -q` | fast tests |
 | `make test-slow` | `uv run pytest -q` | all tests incl. the 10-minute-simulated stability run |
 | `make lint` | `uv run ruff check src tests bench` | lint |
-| `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` | offline demo video `out/demo/composite.mp4` |
-| `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` | real-time run (needs a GPU to be real time) |
+| `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.08"` | offline demo video `out/demo/composite.mp4` |
+| `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.08"` | real-time run (needs a GPU to be real time) |
 | `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` | click-to-ignite viewer |
 | `make capture` | `uv run python -m livefire.app capture` | live camera check |
 | `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` | camera check without a window |
 | `make latency-timer` | `uv run python -m livefire.app latency-timer` | on-screen ms counter for glass-to-glass latency |
 | `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` | print-ready board (other `calib` subcommands below) |
 | `make bench` | `uv run python bench/run_bench.py` | benchmarks to `bench/results/*.csv` |
-| `make bench-radiation` | `uv run python bench/p2_radiation_compare.py` | radiation modes 0/1/2: cost CSV `bench/results/radiation_cpu_<date>.csv` and spread CSV `eval/results/radiation_effect_<date>.csv` (ADR-0006; about 20 min on CPU, `--quick` for a smoke run) |
+| `make bench-radiation` | `uv run python bench/p2_radiation_compare.py` | radiation modes 0/1/2: cost CSV `bench/results/radiation_cpu_<date>.csv` and spread CSV `eval/results/radiation_effect_<date>.csv` (ADR-0006; about 33 min on CPU, `--quick` for a smoke run) |
+| `make eval-m9` | `uv run python eval/p2_m9_spread.py` | M9 spread monotonicity (PRD 11.1): scripted, dev and held-out scenarios, CSVs `eval/results/m9_spread_<date>.csv` and `m9_summary_<date>.csv`; exit 1 if M9 fails (CPU; see the CSV `wall_s`; `--quick` for a smoke run) |
+| `make eval-ablation-uniform` | `uv run python eval/p2_ablation_uniform.py` | uniform vs material-dependent combustion (PRD 11.2) `eval/results/ablation_uniform_<date>.csv` and the demo-spread evidence `demo_spread_<date>.csv` (CPU, about 30 min; `--part ablation|demo`, `--quick`) |
 | `make bench-spike` | `uv run python bench/spike/run_spike.py` | Warp vs Taichi kernel spike (decides ADR-0001) |
 | `make plots` | `uv run python bench/plots.py` | plots from the CSVs |
 | - | `uv run python bench/depth_spike.py` | depth model spike (ADR-0005) |

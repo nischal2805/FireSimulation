@@ -1,3 +1,4 @@
+# NOTE: the top-level `status` is the thermal/property label; `status_detail` carries the per-group labels.
 # units: m0_areal [kg/m^2], delta [m], rho [kg/m^3], c [J/(kg K)], k [W/(m K)],
 #        T_ign [K], t_delay [s], mdot_ref [kg/(m^2 s)], dH [J/kg], chi [-],
 #        char_yield [-], y_soot [kg/kg], eps [-]

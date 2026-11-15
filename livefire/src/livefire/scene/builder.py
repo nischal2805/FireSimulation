@@ -16,7 +16,7 @@ from livefire.common.geometry import AABB, CameraCalibration, VoxelGrid
 from livefire.perception.material.types import MATERIAL_CLASSES, MaterialPrediction
 from livefire.scene.snapshot import ObjectRegistry, SceneSnapshot, WorldObject
 from livefire.scene.splat import view_occlusion
-from livefire.scene.surfels import Surfels, bin_surfels, build_neighbors, view_points
+from livefire.scene.surfels import Surfels, ViewPoints, bin_surfels, build_neighbors, view_points
 from livefire.sim.materials import MaterialTable
 
 THICK_DELTA = 1e-3  # m; objects with delta >= this are obstacles
@@ -70,15 +70,39 @@ def snapshot_from_surfels(
     measured views used for the occlusion depth (``views[c].depth/valid`` are the measured depth, e.g. the accumulated
     acquisition depth; ``obj_id``/``rgb`` are unused here). ``observations`` maps obj_id -> {cam_id: per-camera id}
     (default: every camera observes every object under the same id)."""
+    cams = {cid: v.calib for cid, v in views.items()}
+    versions = {c.calib_version for c in cams.values()}
+    if len(versions) != 1:
+        raise ValueError(f"cameras disagree on calib_version: {versions}")
+    roi = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
+    s = float(grid_cfg["surfel_spacing"])
+    vd, vh = {}, {}
+    for cid, v in views.items():
+        vd[cid], vh[cid] = view_occlusion(v.calib, sf.pos, sf.area, v.depth, v.valid, roi, sf.normal, s)
+    obs = {o: {cid: o for cid in views} for o in materials} if observations is None else observations
+    return _assemble_snapshot(sf, cams, versions.pop(), vd, vh, materials, grid_cfg, version, names, material_table, obs)
+
+
+def _assemble_snapshot(
+    sf: Surfels,
+    cams: dict[int, CameraCalibration],
+    calib_version: int,
+    view_depth: dict[int, NDArray[np.float32]],
+    view_hole_mask: dict[int, NDArray[np.bool_]],
+    materials: dict[int, MaterialPrediction],
+    grid_cfg: dict[str, Any],
+    version: int,
+    names: dict[int, str] | None,
+    material_table: MaterialTable | None,
+    observations: dict[int, dict[int, int]],
+) -> SceneSnapshot:
+    """Shared tail of ``snapshot_from_surfels`` and ``snapshot_from_primitives``: material lookup, symmetric
+    neighbours, thick-object obstacles (``delta >= THICK_DELTA``), registry. Host NumPy, world frame, metres."""
     table = material_table or MaterialTable.load()
     roi = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
     G = int(grid_cfg["G"])
     s = float(grid_cfg["surfel_spacing"])
     grid = VoxelGrid(roi, G)
-    cams = {cid: v.calib for cid, v in views.items()}
-    versions = {c.calib_version for c in cams.values()}
-    if len(versions) != 1:
-        raise ValueError(f"cameras disagree on calib_version: {versions}")
     n = len(sf.pos)
     unknown = sorted(set(np.unique(sf.obj_id).tolist()) - set(materials))
     if unknown:
@@ -103,20 +127,56 @@ def snapshot_from_surfels(
     solid_fraction = np.where(solid_mask.reshape(-1) > 0, np.minimum(1.0, area_sum / grid.h**2), 0.0)
     solid_fraction = solid_fraction.reshape(G, G, G).astype(np.float32)
 
-    vd, vh = {}, {}
-    for cid, v in views.items():
-        vd[cid], vh[cid] = view_occlusion(v.calib, sf.pos, sf.area, v.depth, v.valid, roi, sf.normal, s)
-
     reg = ObjectRegistry()
     for o in sorted(materials):
-        obs = observations.get(o, {}) if observations is not None else {cid: o for cid in views}
-        reg.add(WorldObject(o, (names or {}).get(o, f"object_{o}"), materials[o], obs))
+        reg.add(WorldObject(o, (names or {}).get(o, f"object_{o}"), materials[o], observations.get(o, {})))
     return SceneSnapshot(
-        version=version, calib_version=versions.pop(), roi=roi, h_gas=float(grid.h), cameras=cams,
+        version=version, calib_version=calib_version, roi=roi, h_gas=float(grid.h), cameras=cams,
         pos=sf.pos, normal=sf.normal, area=sf.area, obj_id=sf.obj_id, material_id=mat_id,
         material_conf=mat_conf, neighbors=nbrs, solid_mask=solid_mask, solid_fraction=solid_fraction,
-        view_depth=vd, view_hole_mask=vh, objects=reg, surfel_spacing=s,
+        view_depth=view_depth, view_hole_mask=view_hole_mask, objects=reg, surfel_spacing=s,
     )  # fmt: skip
+
+
+def snapshot_from_primitives(
+    objects: list[Any],
+    grid_cfg: dict[str, Any],
+    seed: int,
+    material_table: MaterialTable | None = None,
+    samples_per_cell: int = 64,
+) -> SceneSnapshot:
+    """Camera-free ``SceneSnapshot`` of analytic primitives (P2R11): ``Box``/``Rect`` of ``scene.synthetic`` (or any
+    object with ``obj_id, name, material, sample(n, rng) -> (points (n,3) m, outward unit normals (n,3), area m^2)``).
+
+    Each object is sampled with ``samples_per_cell * area / surfel_spacing^2`` area-uniform points (seeded by
+    ``seed`` and ``obj_id``; at least ``samples_per_cell`` >= 4 per ``surfel_spacing`` cell on average), binned with
+    ``bin_surfels`` (``ViewPoints`` footprint = area / n, all ``has_normal``), neighbours and obstacles as in
+    ``snapshot_from_surfels`` (shared code). ``cameras={}``, ``view_depth={}``, ``calib_version=0``; materials are
+    the objects' ``material`` names as manual overrides. World frame, metres, host NumPy; the ROI is ``grid_cfg``
+    (needs ``G, roi_min, roi_max, surfel_spacing, neighbor_radius_factor, neighbor_k_max``)."""
+    if samples_per_cell < 4:
+        raise ValueError("samples_per_cell must be >= 4")
+    roi = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
+    s = float(grid_cfg["surfel_spacing"])
+    vps = []
+    for o in objects:
+        if o.obj_id < 0:
+            raise ValueError("primitive obj_id must be >= 0")
+        rng = np.random.default_rng([int(seed), int(o.obj_id)])
+        _, _, area = o.sample(1, rng)
+        n = max(16, int(np.ceil(samples_per_cell * area / s**2)))
+        pts, nrm, area = o.sample(n, rng)
+        keep = roi.contains(pts)
+        vps.append(ViewPoints(pts[keep], nrm[keep], np.full(int(keep.sum()), o.obj_id, np.int32),
+                              np.full(int(keep.sum()), area / n), np.ones(int(keep.sum()), bool)))  # fmt: skip
+    sf = bin_surfels(vps, roi, s)
+    materials = {o.obj_id: manual_material(o.material) for o in objects}
+    present = set(sf.obj_id.tolist())
+    missing = [o.name for o in objects if o.obj_id not in present]
+    if missing:
+        raise ValueError(f"objects produced no surface elements (outside the ROI or too small): {missing}")
+    names = {o.obj_id: o.name for o in objects}
+    return _assemble_snapshot(sf, {}, 0, {}, {}, materials, grid_cfg, 1, names, material_table, {})
 
 
 def snapshot_from_synthetic(scene_name: str = "table_v1", grid_override: dict[str, Any] | None = None) -> SceneSnapshot:

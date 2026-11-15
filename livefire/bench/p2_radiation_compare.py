@@ -39,8 +39,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKLOAD_VERSION = 2  # bench/workloads.yaml (P2R7)
 IGNITE_POINT = np.array([-0.075, 0.0, 0.1])  # same point as bench/workloads.yaml and `make run`
 # m: radii of the brief (~100 / ~1000 / ~3000 burning elements were expected, but table_v1 has only 280 paper, 288 cloth
-# and a few hundred wood elements near the ignition point, so the actual counts are lower and are recorded in the
-# variant); the last radius lights every flammable element (the largest fire the scene can hold).
+# and 294 wood elements in total (whole-scene totals, not near the ignition point), so the actual counts are lower and
+# are recorded in the variant); the last radius lights every flammable element (the largest fire the scene can hold).
 FIRE_RADII = (0.03, 0.08, 0.15, 10.0)
 OBJECTS = {
     0: "table",

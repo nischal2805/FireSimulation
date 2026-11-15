@@ -40,8 +40,8 @@ Same paper ignition for every mode.
 - Cost (CSV 1): median/p95 of `SurfaceFireModel.compute_radiation()` (stage `radiation`) and of one full surface
   step (stage `surface_step`) with T_g = T_amb, 5 repeats, 2 warm-up launches discarded, 10 (radiation) or 6
   (step) samples per repeat. Fire sizes: ignition radius 0.03, 0.08, 0.15 m and "all flammables" (10 m). The brief
-  expected ~100 / ~1000 / ~3000 burning elements; `table_v1` has too few flammable elements near the ignition
-  point (280 paper, 288 cloth, a few hundred wood), so the measured counts are 28 / 176 / 354 / 862 (in the variant
+  expected ~100 / ~1000 / ~3000 burning elements; `table_v1` has too few flammable elements in total
+  (280 paper, 288 cloth, 294 wood), so the measured counts are 28 / 176 / 354 / 862 (in the variant
   name `mode<k>_burning<n>`).
 - Effect (CSV 2): first ignition time and burnt area (elements that were ever burning) per object at 10 / 30 / 60 s,
   for two ignitions: `paper_all` (every paper element lit, the Task 1 spread scenario) and `local_r0.06` (the
@@ -69,7 +69,7 @@ so the mode 2 surface step at 862 burning elements adds about 4 % to it on CPU. 
 (`make bench-radiation` on the RTX 4060 machine); nothing here is an estimate of it.
 
 Effect, `eval/results/radiation_effect_2026-11-15.csv` (simulated seconds of first ignition; "-" = never within 60 s;
-burnt area in m^2 is identical at 10/30/60 s for every row because all burning ends within 10 s):
+burnt area in m^2 is identical at 10/30/60 s for every row because no new element ignites after 10 s; burn-out time is not recorded):
 
 | model, ignition | mode | cloth first ignition | cloth burnt area | wood | metal | max cloth T_s (K) | max paper T_s (K) | `rad_deficit_J` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -84,8 +84,10 @@ burnt area in m^2 is identical at 10/30/60 s for every row because all burning e
 
 Paper burnt area: 0.0326 m^2 (paper_all, 280 elements) and 0.0124 m^2 (local, 101 elements) in every mode: the
 paper itself does not spread by radiation (coplanar elements have cos = 0) and conduction plus gas heating do not
-spread it either within the scenario. Metal (a non-flammable) never burns in any run and the cloth/wood/metal
-are heated by at most a few K when they are out of reach. Glass is not in `table_v1`; non-flammable behaviour
+spread it either within the scenario. Metal (a non-flammable) never burns in any run. Out-of-reach heating, from
+the CSV maxima: wood reaches at most 299.14 K (+6.0 K, mode 1, coupled paper_all), metal at most 293.97 K (+0.8 K);
+cloth, which is the receiver, reaches 429.5 / 430.4 K (modes 1 / 2, surface) and 436.0 / 436.9 K (coupled G=32) in
+`local_r0.06`, still below `T_ign` 520 K, and 327.5 K in coupled mode 0 with `paper_all`. Glass is not in `table_v1`; non-flammable behaviour
 is covered by the unit tests (`tests/test_radiation.py`).
 
 Observations that count against mode 1: (i) first ignition 1.2 s earlier than mode 2 (2.50 vs 3.68 s); (ii) burning paper reaches 1331 K in mode 1
@@ -102,7 +104,7 @@ robustness 20, implementation risk 10; the licence criterion (5) is the same for
 
 | criterion (weight) | mode 0 (local) | mode 1 (grid) | mode 2 (gather) |
 | --- | --- | --- | --- |
-| visual effect (35): cloth ignites from burning paper | 0 (never, CSV 2) | 3 (ignites, 2.5 s, too early, paper over-heats) | 4 (ignites, 3.7 s, paper bounded) |
+| visual effect (35): cloth ignites from burning paper | 0 (never, CSV 2) | 3 (ignites, 2.5 s, earlier than mode 2, no reference time available; paper over-heats) | 4 (ignites, 3.7 s, paper bounded) |
 | cost now (30): CPU table, GPU "pending user run" | 5 (0.007 ms) | 4 (5.3 ms at 862) | 3 (27.7 ms at 862, linear in emitters) |
 | robustness (20) | 5 | 2 (near-field error, deficit, 2e6-cell cap) | 4 (exact within `rad_R`, bounded by `rad_max_emitters`, overflow counted) |
 | implementation risk (10) | 5 | 2 (atomic float sums, binning) | 4 |
@@ -122,7 +124,8 @@ the stated fallback.
 
 **Fallback = mode 1** (`rad_mode: 1` in `configs/sim.yaml`), to be used if the GPU run shows that mode 2 is too
 slow at the largest fires (the cap `rad_max_emitters` = 8192 bounds it but N x E can be large), and to be
-re-examined for its near-field error then. No change to the tests is needed to switch (they set the mode explicitly).
+re-examined for its near-field error then. Switching the default also requires updating `tests/test_thermal_audit.py::test_default_rad_mode_is_gather`, which
+pins mode 2; the other tests set the mode explicitly.
 
 Tuned artistic values: **none**. `eps_f` 0.7, `T_rad_flame` 1100 K, `rad_R` 0.30 m, `rad_r_min` 0.01 m,
 `rad_cell` 0.05 m, `rad_max_emitters` 8192 keep the Task 1 values (declared ranges unchanged).

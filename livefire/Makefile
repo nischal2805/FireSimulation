@@ -1,4 +1,4 @@
-.PHONY: bench-radiation interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: eval-m9 eval-ablation-uniform bench-radiation interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -13,14 +13,14 @@ lint:
 	uv run ruff check src tests bench
 
 # CPU-friendly offline demo; override e.g. `make run RUN_ARGS='--grid 64 --offline --seconds 10 --ignite ...'`
-RUN_ARGS ?= --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"
+RUN_ARGS ?= --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.08"
 
 run:
 	uv run python -m livefire.app run --scene table_v1 --out out/demo $(RUN_ARGS)
 
 # Real-time run (default grid from configs/grid.yaml), 20 wall seconds: for the GPU machine
 run-rt:
-	uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"
+	uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.08"
 
 bench:
 	uv run python bench/run_bench.py
@@ -41,6 +41,17 @@ calibrate:
 
 eval:
 	@echo "not implemented until P1"; exit 2
+
+# M9 spread monotonicity (P2-003): scripted + 12 dev + 12 held-out randomized scenarios x 4 target materials; CPU, long
+# (see README); exit code 1 if M9 fails. `make eval-m9 M9_ARGS=--quick` is a smoke run.
+M9_ARGS ?=
+eval-m9:
+	uv run python eval/p2_m9_spread.py $(M9_ARGS)
+
+# Uniform vs material-dependent combustion and the demo-spread evidence (P2-003); CPU, long
+ABL_ARGS ?=
+eval-ablation-uniform:
+	uv run python eval/p2_ablation_uniform.py $(ABL_ARGS)
 
 # Interactive viewer on the synthetic scene: left click ignites, right click selects, keys 1-8 set material, q quits
 interactive:

@@ -41,3 +41,17 @@ def percentile(values: Sequence[float] | np.ndarray, q: float) -> float:
     """``np.percentile`` (linear interpolation) that returns NaN for an empty input."""
     a = np.asarray(values, dtype=np.float64)
     return float(np.percentile(a, q)) if a.size else float("nan")
+
+
+def mae_report(error_cm: np.ndarray, tape_cm: np.ndarray) -> dict[str, float]:
+    """M4 statistics from per-pair signed errors ``error_cm = recon - tape`` and the tape distances (both (n,), cm).
+    Keys: n, mae_cm, median_abs_cm, p95_abs_cm, max_abs_cm, bias_cm, rmse_cm, mean_rel_err_pct."""
+    e, t = np.asarray(error_cm, dtype=np.float64), np.asarray(tape_cm, dtype=np.float64)
+    if e.size == 0 or e.shape != t.shape:
+        raise ValueError("need at least one pair; error_cm and tape_cm must have the same shape")
+    if np.any(t <= 0):
+        raise ValueError("tape distances must be positive")
+    a = np.abs(e)
+    return {"n": float(e.size), "mae_cm": float(a.mean()), "median_abs_cm": float(np.median(a)),
+            "p95_abs_cm": percentile(a, 95), "max_abs_cm": float(a.max()), "bias_cm": float(e.mean()),
+            "rmse_cm": float(np.sqrt(np.mean(e * e))), "mean_rel_err_pct": float(100.0 * np.mean(a / t))}  # fmt: skip

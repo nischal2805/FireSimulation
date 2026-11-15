@@ -193,14 +193,24 @@ def main(argv: list[str] | None = None) -> int:
     add_source_args(ap)
     ap.add_argument("--region", default=None, metavar="x0,y0,x1,y1",
                     help="table area in metres, world frame (default: XY footprint of acquisition.fusion_roi)")
+    ap.add_argument("--label", default=None, help="output file name part (default: derived from the bundle label); "
+                    "use one per scene so a second run does not overwrite the first")
     ap.add_argument("--out-dir", default="eval/results")
     a = ap.parse_args(argv)
-    region = tuple(float(x) for x in a.region.split(",")) if a.region else None
-    if region is not None and (len(region) != 4 or region[2] <= region[0] or region[3] <= region[1]):
-        raise SystemExit("--region needs x0,y0,x1,y1 with x1 > x0 and y1 > y0")
-    bundle = resolve_bundle(a)
-    rep = placement_study(bundle, region_xy=region)  # type: ignore[arg-type]
-    label = _slug(bundle.label)
+    try:
+        region = tuple(float(x) for x in a.region.split(",")) if a.region else None
+        if region is not None and (len(region) != 4 or region[2] <= region[0] or region[3] <= region[1]):
+            raise ValueError("needs x0,y0,x1,y1 with x1 > x0 and y1 > y0")
+    except ValueError as e:
+        print(f"bad --region {a.region!r}: {e} (write it as --region=\"-0.5,-0.4,0.5,0.4\")", file=sys.stderr)
+        return 2
+    try:
+        bundle = resolve_bundle(a)
+        rep = placement_study(bundle, region_xy=region)  # type: ignore[arg-type]
+    except (ValueError, OSError, RuntimeError) as e:  # calibration, camera, depth or reconstruction problems
+        print(f"placement study failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+    label = a.label or _slug(bundle.label)
     path = write_csv(Path(a.out_dir) / f"placement_{label}.csv", FIELDS, rep.rows)
     print(f"placement study ({bundle.label}); region {rep.region_xy}, {rep.n_samples} samples")
     for r in rep.rows:

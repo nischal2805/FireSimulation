@@ -32,7 +32,7 @@ import numpy as np
 from livefire.app.acq_bundle import AcqBundle, add_source_args, resolve_bundle
 from livefire.app.click import resolve_click
 from livefire.app.interactive import ViewLayout
-from livefire.common.eval_csv import read_csv, write_csv
+from livefire.common.eval_csv import mae_report, read_csv, write_csv
 
 PAIR_FIELDS = ("id", "cam_a", "u_a", "v_a", "cam_b", "u_b", "v_b", "x_a", "y_a", "z_a", "x_b", "y_b", "z_b",
                "d_recon_cm", "d_tape_cm", "error_cm")  # fmt: skip
@@ -163,16 +163,9 @@ class MeasureSession:
     # ---- results -------------------------------------------------------------------------------------------------
     def report(self) -> dict[str, float]:
         """M4 statistics of the stored pairs (``eval/geometry_mae.mae_report``); raises ``ValueError`` with no pairs."""
-        from livefire.common.eval_csv import percentile  # local: keeps the module import light
-
         if not self.pairs:
             raise ValueError("no pairs stored yet")
-        err = np.array([p.error_cm for p in self.pairs])
-        tape = np.array([p.tape_cm for p in self.pairs])
-        a = np.abs(err)
-        return {"n": float(len(a)), "mae_cm": float(a.mean()), "median_abs_cm": float(np.median(a)),
-                "p95_abs_cm": percentile(a, 95), "max_abs_cm": float(a.max()), "bias_cm": float(err.mean()),
-                "mean_rel_err_pct": float(100 * np.mean(a / tape))}  # fmt: skip
+        return mae_report(np.array([p.error_cm for p in self.pairs]), np.array([p.tape_cm for p in self.pairs]))
 
     def summary_line(self) -> str:
         if not self.pairs:
@@ -285,6 +278,8 @@ def run_window(session: MeasureSession, pairs_path: Path, max_w: int | None = No
         while True:
             cv2.imshow(WINDOW, render(session, layout))
             key = cv2.waitKey(30)
+            if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:  # window closed with the X button
+                break
             act = handle_key(session, -1 if key == -1 else key & 0xFF)
             if len(session.pairs) != saved or act == "save":
                 session.save(pairs_path)  # autosave on every change: a crash never loses pairs

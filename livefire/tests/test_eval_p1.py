@@ -108,7 +108,7 @@ def _row(frame, cam, state, c2d, t_present_ns, frame_ms=1000 / 30, dropped=0, la
 
 
 def _synthetic_latency_csv(path: Path) -> Path:
-    """Known answers: cam0 c2d = 50 + frame % 11 (50..60, p50 55), cam1 = 90 + frame % 21 (90..110, p50 100, p95 109).
+    """Known answers: cam0 c2d = 50 + frame % 11 (50..60, p50 55), cam1 = 105 + frame % 21 (105..125, p50 115, p95 124).
     Frames 0-29 warm-up (c2d 999), frames 30-39 READY (7777), 40-239 SIMULATING at exactly 30 fps; 4 dropped frames."""
     rows, t0 = [], 1_000_000_000
     for f in range(240):
@@ -119,7 +119,7 @@ def _synthetic_latency_csv(path: Path) -> Path:
             elif f < 40:
                 st, c2d = "READY", 7777.0
             else:
-                st, c2d = "SIMULATING", 50.0 + f % 11 if cam == 0 else 90.0 + f % 21
+                st, c2d = "SIMULATING", 50.0 + f % 11 if cam == 0 else 105.0 + f % 21
             rows.append(_row(f, cam, st, c2d, tp, frame_ms=0.0 if f == 0 else 1000 / 30, dropped=int(f in (50, 90, 130, 170)),
                              lag=0.001 * f))  # fmt: skip
     return _csv_rows(path, rows)
@@ -133,9 +133,9 @@ def test_latency_statistics_known_answers(tmp_path: Path) -> None:
     assert c0["n_rows"] == 200 and c0["n_frames"] == 200  # frames 40..239 only: warm-up and READY rows are excluded
     f = np.arange(40, 240)
     assert c0["c2d_p50_ms"] == pytest.approx(np.median(50 + f % 11)) == 55.0
-    assert c0["c2d_max_ms"] == 60.0 and c0["meets_target_p95"] is True
-    assert c1["c2d_p50_ms"] == pytest.approx(np.median(90 + f % 21)) and 98 <= c1["c2d_p50_ms"] <= 102
-    assert c1["c2d_max_ms"] == 110.0 and c1["c2d_p95_ms"] > 100.0 and c1["meets_target_p95"] is False
+    assert c0["c2d_max_ms"] == 60.0 and c0["meets_target_p50"] is True
+    assert c1["c2d_p50_ms"] == pytest.approx(np.median(105 + f % 21)) and 113 <= c1["c2d_p50_ms"] <= 117
+    assert c1["c2d_max_ms"] == 125.0 and c1["c2d_p95_ms"] > 120.0 and c1["meets_target_p50"] is False
     assert al["n_rows"] == 400 and al["n_frames"] == 200  # frame-level numbers count each frame once, not once per camera
     assert al["fps_delivered"] == pytest.approx(30.0, rel=1e-3)
     assert al["frame_p95_ms"] == pytest.approx(1000 / 30)
@@ -168,7 +168,7 @@ def test_latency_cli_glass_to_glass_stays_separate(tmp_path: Path, capsys) -> No
     assert float(rows["cam0"]["g2g_offset_ms"]) == 110.0 and rows["cam0"]["g2g_n"] == "3"
     assert float(rows["cam0"]["c2d_p50_ms"]) == 55.0  # M2 itself does not include the offset
     assert float(rows["cam0"]["c2d_p50_plus_offset_ms"]) == 165.0 and rows["all"]["g2g_offset_ms"] == ""
-    assert "NOT MET" in capsys.readouterr().out  # cam1 p95 over 100 ms
+    assert "NOT MET" in capsys.readouterr().out  # cam1 median over 100 ms
     assert latency.main([str(tmp_path / "nope.csv"), "--out-dir", str(tmp_path)]) == 2
     bad = tmp_path / "bad.csv"
     bad.write_text("a,b\n1,2\n")
@@ -259,8 +259,12 @@ def test_placement_cli_exit_codes_and_csv(tmp_path: Path, capsys) -> None:
     rows = read_csv(out / "placement_unit_bad.csv")
     assert {r["metric"] for r in rows} >= {"camera_angle", "shared_fraction", "valid_coverage", "visible_fraction"}
     assert any(r["status"] == "FAIL" for r in rows)
-    with pytest.raises(SystemExit):
-        placement.main(["--bundle", str(good), "--region", "1,1,0,0"])
+    assert placement.main(["--bundle", str(good), "--region", "1,1,0,0"]) == 2
+    assert placement.main(["--bundle", str(good), "--region=a,b"]) == 2
+    assert placement.main(["--bundle", str(tmp_path / "missing.npz"), "--out-dir", str(out)]) == 2
+    assert "placement study failed" in capsys.readouterr().err
+    assert placement.main(["--bundle", str(good), "--label", "sceneB", "--out-dir", str(out)]) in (0, 1)
+    assert (out / "placement_sceneB.csv").is_file() and (out / "placement_unit_good.csv").is_file()
 
 
 # ------------------------------------------------------------------------------------------------ bundle
@@ -494,12 +498,16 @@ def test_alignment_board_missing_and_no_frames() -> None:
 
 def test_alignment_cli_selftest(tmp_path: Path, capsys) -> None:
     assert alignment.main(["--selftest", "--offset-m", "0.04", "--out-dir", str(tmp_path), "--label", "st"]) == 0
-    summ = {(r["scope"], r["metric"]): float(r["value"]) for r in read_csv(tmp_path / "alignment_st.csv")}
-    assert 3.5 < summ["all", "err_median_cm"] < 6.5 and summ["all", "meets_m6"] == 0.0  # 4 cm depth error along ~1.0-1.2x rays
+    rows = read_csv(tmp_path / "alignment_st.csv")
+    summ = {(r["scope"], r["metric"]): r["value"] for r in rows}
+    assert 3.5 < float(summ["all", "err_median_cm"]) < 6.5  # 4 cm depth error along ~1.0-1.2x rays
+    assert summ["all", "meets_m6"] == ""  # a self-test carries no verdict
+    assert all("SYNTHETIC SELFTEST" in r["note"] and "selftest board" in r["label"] for r in rows)
     assert len(read_csv(tmp_path / "alignment_st_landmarks.csv")) >= 30
     assert "NOT MET" in capsys.readouterr().out
     assert alignment.main(["--selftest", "--offset-m", "0.0", "--out-dir", str(tmp_path), "--label", "st0"]) == 0
-    assert "MET" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "MET" in out and "NOT MET" not in out and "SYNTHETIC SELFTEST" in out and "not a fully independent" in out
 
 
 # ------------------------------------------------------------------------------------------------ acquisition end to end

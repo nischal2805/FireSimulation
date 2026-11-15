@@ -28,25 +28,11 @@ from typing import Any
 import numpy as np
 
 from livefire.app.acq_bundle import AcqBundle, resolve_bundle
-from livefire.common.eval_csv import percentile, read_csv, write_csv
+from livefire.common.eval_csv import mae_report, read_csv, write_csv
 from livefire.common.geometry import backproject_depth
 
 FIELDS = ("metric", "scope", "value", "unit", "n", "note")
 MIN_PAIRS = 10
-
-
-def mae_report(error_cm: np.ndarray, tape_cm: np.ndarray) -> dict[str, float]:
-    """M4 statistics from per-pair signed errors ``error_cm = recon - tape`` and the tape distances (both (n,), cm).
-    Keys: n, mae_cm, median_abs_cm, p95_abs_cm, max_abs_cm, bias_cm, rmse_cm, mean_rel_err_pct."""
-    e, t = np.asarray(error_cm, np.float64), np.asarray(tape_cm, np.float64)
-    if e.size == 0 or e.shape != t.shape:
-        raise ValueError("need at least one pair; error_cm and tape_cm must have the same shape")
-    if np.any(t <= 0):
-        raise ValueError("tape distances must be positive")
-    a = np.abs(e)
-    return {"n": float(e.size), "mae_cm": float(a.mean()), "median_abs_cm": float(np.median(a)),
-            "p95_abs_cm": percentile(a, 95), "max_abs_cm": float(a.max()), "bias_cm": float(e.mean()),
-            "rmse_cm": float(np.sqrt(np.mean(e * e))), "mean_rel_err_pct": float(100.0 * np.mean(a / t))}  # fmt: skip
 
 
 def read_pairs(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
@@ -123,7 +109,11 @@ def main(argv: list[str] | None = None) -> int:
         from livefire.scene.synthetic import build_table_v1, render_view
 
         ns = argparse.Namespace(bundle=a.bundle, synthetic=True, depth=a.depth, grid=a.grid, out=a.out)
-        bundle = resolve_bundle(ns)
+        try:
+            bundle = resolve_bundle(ns)
+        except (ValueError, OSError, RuntimeError) as e:
+            print(f"synthetic acquisition failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return 2
         scene = build_table_v1()
         truth = {c: render_view(scene, cal) for c, cal in bundle.cameras.items()}
         label = label or "synthetic_" + (a.depth or "oracle")

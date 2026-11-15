@@ -5,7 +5,7 @@ columns ``frame, cam, seq, state, t_arrive_ns, t_use_ns, t_present_ns, frame_age
 composite_ms, frame_ms, dropped_frame, sim_lag_s, fps, cams_shown``.
 
 M2 = ``capture_to_display_ms = t_present - t_arrive`` (host clock, ``perf_counter_ns``), target 100 ms or less. The
-verdict uses the **p95** (a frame-level worst-case-ish number; p50 is reported next to it). Steady state only: rows
+verdict gates on the **median** (p50 <= target; controller ruling); p95/p99/max are informational. Steady state only: rows
 whose ``state`` is in ``--states`` (default SIMULATING, PAUSED) and after the first ``--skip-frames`` presented frames
 (default 30: warm-up, GPU clocks, first renders). Frame-level numbers (frame-time p50/p95/p99, delivered fps from the
 ``t_present_ns`` stamps, dropped-frame rate, simulation lag) use one entry per ``frame`` number, not one per camera.
@@ -38,7 +38,7 @@ LIVE_COLUMNS = (
 FIELDS = (
     "scope", "n_rows", "n_frames", "c2d_mean_ms", "c2d_p50_ms", "c2d_p95_ms", "c2d_p99_ms", "c2d_max_ms",
     "age_p50_ms", "age_p95_ms", "composite_p50_ms", "composite_p95_ms", "frame_p50_ms", "frame_p95_ms",
-    "frame_p99_ms", "fps_delivered", "dropped_rate", "sim_lag_max_s", "sim_lag_end_s", "target_ms", "meets_target_p95",
+    "frame_p99_ms", "fps_delivered", "dropped_rate", "sim_lag_max_s", "sim_lag_end_s", "target_ms", "meets_target_p50",
     "g2g_offset_ms", "g2g_n", "c2d_p50_plus_offset_ms",
 )  # fmt: skip
 DEFAULT_STATES = ("SIMULATING", "PAUSED")
@@ -107,16 +107,16 @@ def m2_statistics(rows: LatencyRows, *, states: tuple[str, ...] = DEFAULT_STATES
         ft_ok = ft[ft > 0]
         dropped = rows.cols["dropped_frame"][sel][idx]
         lag = rows.cols["sim_lag_s"][sel][idx]
-        p95 = percentile(c2d, 95)
+        row_p50 = percentile(c2d, 50)
         row: dict[str, Any] = {
             "scope": scope, "n_rows": int(sel.sum()), "n_frames": len(fr), "c2d_mean_ms": float(c2d.mean()),
-            "c2d_p50_ms": percentile(c2d, 50), "c2d_p95_ms": p95, "c2d_p99_ms": percentile(c2d, 99),
+            "c2d_p50_ms": percentile(c2d, 50), "c2d_p95_ms": percentile(c2d, 95), "c2d_p99_ms": percentile(c2d, 99),
             "c2d_max_ms": float(c2d.max()), "age_p50_ms": percentile(age, 50), "age_p95_ms": percentile(age, 95),
             "composite_p50_ms": percentile(comp, 50), "composite_p95_ms": percentile(comp, 95),
             "frame_p50_ms": percentile(ft_ok, 50), "frame_p95_ms": percentile(ft_ok, 95), "frame_p99_ms": percentile(ft_ok, 99),
             "fps_delivered": (len(fr) - 1) / span if span > 0 else float("nan"),
             "dropped_rate": float(dropped.sum() / max(len(fr), 1)), "sim_lag_max_s": float(lag.max()),
-            "sim_lag_end_s": float(lag[np.argmax(fr)]), "target_ms": target_ms, "meets_target_p95": p95 <= target_ms,
+            "sim_lag_end_s": float(lag[np.argmax(fr)]), "target_ms": target_ms, "meets_target_p50": row_p50 <= target_ms,
             "g2g_offset_ms": "", "g2g_n": "", "c2d_p50_plus_offset_ms": "",
         }  # fmt: skip
         if scope.startswith("cam") and int(scope[3:]) in glass:
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     for r in stats:
         print(f"{r['scope']:5s} n={r['n_rows']:5d}  capture-to-display p50 {r['c2d_p50_ms']:.1f} / p95 {r['c2d_p95_ms']:.1f} / "
               f"p99 {r['c2d_p99_ms']:.1f} ms  fps {r['fps_delivered']:.1f}  dropped {r['dropped_rate']:.1%}  "
-              f"M2 target {a.target_ms:.0f} ms (p95): {'MET' if r['meets_target_p95'] else 'NOT MET'}")  # fmt: skip
+              f"M2 target {a.target_ms:.0f} ms (median): {'MET' if r['meets_target_p50'] else 'NOT MET'}")  # fmt: skip
         if r["g2g_offset_ms"] != "":
             print(f"      glass-to-glass camera offset (separate, not in M2): median {r['g2g_offset_ms']:.0f} ms of {r['g2g_n']} readings")
     print(f"wrote {path}")

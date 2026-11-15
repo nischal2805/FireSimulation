@@ -40,9 +40,10 @@ from livefire.common.eval_csv import percentile, read_csv, write_csv
 
 TARGET_M = 0.03
 MIN_BOARD_CORNERS = 8
-SUMMARY_FIELDS = ("metric", "scope", "value", "unit", "n", "note")
+SUMMARY_FIELDS = ("metric", "scope", "value", "unit", "n", "label", "note")
 LANDMARK_FIELDS = ("name", "cam", "u", "v", "x_known", "y_known", "z_known", "x_recon", "y_recon", "z_recon",
                    "err_m", "err_z_m", "status")  # fmt: skip
+SELFTEST_MARK = "SYNTHETIC SELFTEST: injected {off} m depth offset, not a Gate 1 result"
 NOTE = "depth is anchored to the table plane over the board footprint: board corners are not fully independent"
 
 
@@ -181,15 +182,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     label = a.label or ("selftest" if a.selftest else "run")
     summ = summarize(rows)
+    median_cm = next(r["value"] for r in summ if r["scope"] == "all" and r["metric"] == "err_median_cm")
+    met = next(r["value"] for r in summ if r["scope"] == "all" and r["metric"] == "meets_m6")
+    for r in summ:
+        r["label"] = bundle.label
+        if a.selftest:
+            r["note"] = SELFTEST_MARK.format(off=a.offset_m) + (f" | {r['note']}" if r["note"] else "")
+            if r["metric"] == "meets_m6":
+                r["value"] = ""  # a self-test never carries a verdict
     out = Path(a.out_dir)
     write_csv(out / f"alignment_{label}_landmarks.csv", LANDMARK_FIELDS, rows)
     path = write_csv(out / f"alignment_{label}.csv", SUMMARY_FIELDS, summ)
     for s in summ:
-        if s["metric"] in ("err_median_cm", "err_p95_cm", "reconstructed_fraction", "meets_m6"):
+        if s["metric"] in ("err_median_cm", "err_p95_cm", "reconstructed_fraction"):
             print(f"{s['scope']:5s} {s['metric']:22s} {s['value']:.3f} {s['unit']}  (n={s['n']})")
-    allm = {s["metric"]: s["value"] for s in summ if s["scope"] == "all"}
-    print(f"M6 ({bundle.label}): median error {allm['err_median_cm']:.2f} cm, p95 {allm['err_p95_cm']:.2f} cm "
-          f"(target median < {TARGET_M * 100:.0f} cm): {'MET' if allm['meets_m6'] else 'NOT MET'}")  # fmt: skip
+    p95 = next(r["value"] for r in summ if r["scope"] == "all" and r["metric"] == "err_p95_cm")
+    tag = " [SYNTHETIC SELFTEST, not a Gate 1 result]" if a.selftest else ""
+    print(f"M6 ({bundle.label}){tag}: median error {median_cm:.2f} cm, p95 {p95:.2f} cm "
+          f"(target median < {TARGET_M * 100:.0f} cm): {'MET' if met else 'NOT MET'}")  # fmt: skip
+    print("  caveat: board corners lie on the table plane the depth is anchored to, so this is not a fully independent "
+          "check; add elevated landmarks with --landmarks")
     print(f"wrote {path}")
     return 0
 

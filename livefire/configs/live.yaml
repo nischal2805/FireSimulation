@@ -1,0 +1,14 @@
+# Live mode (P1-006; PRD 5.1, 5.5). ALL VALUES BELOW ARE UNTUNED DEFAULTS: they were chosen for synthetic clips
+# and must be tuned on the user's cameras (see README, "Live mode").
+verify_px: {value: 2.0, unit: "px", range: [0.1, 20.0], status: artistic}   # CALIBRATING: board reprojection above this only warns
+drop_seconds: {value: 3.0, unit: "s", range: [0.5, 60.0], status: artistic}  # camera "failed" this long -> removed from rendering
+change:                         # change monitor: live frames vs the reference captured at READY, static regions only
+  threshold: {value: 0.03, unit: "-", range: [0.001, 0.5], status: artistic}        # changed fraction of static pixels
+  frames: 10                    # consecutive new-frame updates above the threshold before PAUSED
+  pixel_threshold: {value: 0.10, unit: "-", range: [0.01, 0.5], status: artistic}   # grey-level change (0..1) after global-gain removal
+  downscale_width: 96           # px, monitor image width (area-averaged grayscale; suppresses sensor noise)
+  footprint_threshold: {value: 0.03, unit: "-", range: [0.005, 0.5], status: artistic}  # composite vs input grey diff marking fire/smoke
+  footprint_dilate_px: 2        # px at monitor resolution: margin around the fire/smoke footprint
+  min_static_fraction: 0.2      # fewer static pixels than this (fire everywhere) -> no decision for that frame
+latency:
+  window_frames: 120            # presented frames used for the HUD percentiles

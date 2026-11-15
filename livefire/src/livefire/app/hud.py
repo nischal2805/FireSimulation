@@ -43,6 +43,7 @@ class HudInfo:
     n_elements: int
     offline: bool
     extra: tuple[str, ...] = ()  # additional lines (interactive viewer: selection, material, radius, message)
+    scene_label: str = "SYNTHETIC SCENE"  # third HUD line (live mode: "LIVE CAMERAS ...")
 
 
 def hud_lines(h: HudInfo) -> list[str]:
@@ -54,7 +55,7 @@ def hud_lines(h: HudInfo) -> list[str]:
         (f"{h.state}   fps {h.fps:5.2f}   p95 frame {h.p95_ms:7.1f} ms   sim rt {h.rt_factor:5.3f}x   "
          f"sim t {h.t_sim:6.3f} s"),
         f"{deg}   holes {holes}   elements {h.n_elements}",
-        "SYNTHETIC SCENE" + ("   OFFLINE (not real-time)" if h.offline else ""),
+        h.scene_label + ("   OFFLINE (not real-time)" if h.offline else ""),
     ]
     return lines + list(h.extra)
 

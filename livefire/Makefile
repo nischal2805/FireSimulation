@@ -1,4 +1,4 @@
-.PHONY: interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -38,6 +38,11 @@ calibrate:
 
 eval:
 	@echo "not implemented until P1"; exit 2
+
+# Live mode: active calibration + cameras in configs/cameras.yaml -> acquire -> simulate on live frames, click to ignite.
+# e.g. make live LIVE_ARGS="--depth da2_relative_small --grid 48"
+live:
+	uv run python -m livefire.app live $(LIVE_ARGS)
 
 # Interactive viewer on the synthetic scene: left click ignites, right click selects, keys 1-8 set material, q quits
 interactive:

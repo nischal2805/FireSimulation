@@ -38,6 +38,17 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--max-width", type=int, default=None, help="window width limit px (default: screen size)")
     i.add_argument("--max-height", type=int, default=None, help="window height limit px (default: screen size)")
     i.add_argument("--frames", type=int, default=None, help="exit after N frames (smoke testing)")
+    lv = sub.add_parser("live", help="live mode: calibrated cameras -> acquire -> simulate on live frames, click to ignite")
+    lv.add_argument("--cameras", default=None, help="cameras file (default configs/cameras.yaml)")
+    lv.add_argument("--calib", default="active", help="calibration version number or 'active' (default)")
+    lv.add_argument("--calib-root", default="data/calib")
+    lv.add_argument("--depth", default=None, help="depth backend from configs/depth.yaml (default: its 'backend'; "
+                    "'oracle' = synthetic ground truth, demo/tests only)")
+    lv.add_argument("--grid", type=int, default=None, help="gas grid G override (default: configs/grid.yaml)")
+    lv.add_argument("--out", default="out/live", help="run directory root (latency.csv, events.jsonl, screenshots)")
+    lv.add_argument("--max-width", type=int, default=None)
+    lv.add_argument("--max-height", type=int, default=None)
+    lv.add_argument("--frames", type=int, default=None, help="exit after N frames (smoke testing)")
     from livefire.app.capture_cli import add_subparsers, run_command
 
     add_subparsers(sub)
@@ -49,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd in ("capture", "latency-timer"):
         return run_command(a)
+    if a.cmd == "live":
+        from livefire.app.live import run_live
+
+        return run_live(a.cameras, a.calib, Path(a.calib_root), a.depth, a.grid, Path(a.out), a.max_width, a.max_height,
+                        a.frames)
     if a.cmd == "interactive":
         from livefire.app.window import run_interactive
 

@@ -9,7 +9,7 @@ The returned snapshot owns its arrays; the sources are started/stopped by the ca
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -71,6 +71,19 @@ def _backends(depth_backend: Any, cals: dict[int, CameraCalibration]) -> dict[in
     return {c: depth_backend(cals[c]) for c in cals}
 
 
+def prepare_frame(f: Frame, cal: CameraCalibration, undistorter: Any | None) -> Frame:
+    """Undistort ``f`` with ``undistorter`` (unless the source already stamped ``cal.calib_version`` on it) and
+    re-stamp it with the calibration version, so geometry and renderer accept it. Raises ``CalibVersionError`` if the
+    frame carries a different non-zero version. Shared by acquisition and live mode."""
+    ver = cal.calib_version
+    if f.calib_version not in (0, ver):
+        raise CalibVersionError(f"camera {cal.cam_id}: frame calib_version {f.calib_version} != calibration {ver}")
+    rgb = f.rgb
+    if f.calib_version != ver and undistorter is not None:
+        rgb = undistorter.apply(rgb)
+    return Frame(cal.cam_id, rgb, f.t_arrive_ns, f.seq, ver)
+
+
 def collect_frames(
     sources: Mapping[int, Any] | list[Any],
     cals: dict[int, CameraCalibration],
@@ -79,11 +92,13 @@ def collect_frames(
     max_frames: int,
     min_frames: int,
     first_frame_timeout_s: float = 10.0,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[int, list[Frame]]:
     """Sample each started source over ``seconds``: at most ``max_frames`` new frames per camera, spaced
     ``seconds / max_frames`` apart. Frames are undistorted (``Undistorter``) unless the source already stamped the
     calibration's ``calib_version`` on them, and re-stamped with it. A source reporting status ``ended`` stops
-    contributing. Raises ``ReconstructionError`` if a camera yields fewer than ``min_frames``."""
+    contributing. Raises ``ReconstructionError`` if a camera yields fewer than ``min_frames``. ``progress`` (optional)
+    is called with a short status string after every collected frame."""
     srcs = dict(sources) if isinstance(sources, Mapping) else {s.cam_id: s for s in sources}
     missing = set(cals) - set(srcs)
     if missing:
@@ -108,13 +123,9 @@ def collect_frames(
             active = True
             if f is None or f.seq == last_seq[c] or now - t0 < nxt[c]:
                 continue
-            ver = cals[c].calib_version
-            if f.calib_version not in (0, ver):
-                raise CalibVersionError(f"camera {c}: frame calib_version {f.calib_version} != calibration {ver}")
-            rgb = f.rgb
-            if f.calib_version != ver and c in undistorters:
-                rgb = undistorters[c].apply(rgb)
-            out[c].append(Frame(c, rgb, f.t_arrive_ns, f.seq, ver))
+            out[c].append(prepare_frame(f, cals[c], undistorters.get(c)))
+            if progress is not None:
+                progress(f"capturing camera {c}: frame {len(out[c])}/{max_frames}")
             last_seq[c] = f.seq
             nxt[c] = (now - t0) + period
         if not active or now >= t_end and all(len(v) >= min_frames for v in out.values()):
@@ -145,13 +156,15 @@ def acquire_with_report(
     grid_cfg: dict[str, Any] | None = None,
     version: int = 1,
     device: str | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> AcquisitionResult:
     """Acquire a frozen scene. ``sources``: started ``CameraSource`` objects (list or ``{cam_id: source}``);
     ``calibration``: ``calib.store.CalibrationSet`` or ``{cam_id: CameraCalibration}``; ``depth_backend``: a
     ``{cam_id: DepthBackend}`` mapping, a factory ``CameraCalibration -> DepthBackend`` or one shared backend; each
     camera's backend must already anchor depth to the table plane (``AnchoredDepthBackend``, P1R3) and return
     metric Z-depth. ``cfg`` = ``configs/acquisition.yaml: acquisition`` and ``grid_cfg`` = ``configs/grid.yaml``
-    (defaults loaded). Raises ``ReconstructionError`` if too few frames / no surface is found."""
+    (defaults loaded). ``progress`` (optional) receives short status strings from the calling thread. Raises
+    ``ReconstructionError`` if too few frames / no surface is found."""
     cfg = cfg or load_acquisition_config()
     grid_cfg = grid_cfg or load_yaml("grid")
     cals, undists = _cal_of(calibration)
@@ -166,13 +179,17 @@ def acquire_with_report(
         finally:
             timings[name] = timings.get(name, 0.0) + (time.perf_counter() - t) * 1e3
 
+    def say(msg: str) -> None:
+        if progress is not None:
+            progress(msg)
+
     t_all = time.perf_counter()
     warnings: list[str] = []
     report: dict[str, Any] = {"cameras": {}, "warnings": warnings}
 
     with stage("capture"):
         frames = collect_frames(sources, cals, undists, float(_val(cfg["seconds"])), int(cfg["max_frames"]),
-                                int(cfg["min_frames"]))  # fmt: skip
+                                int(cfg["min_frames"]), progress=progress)  # fmt: skip
 
     acc: dict[int, AccumulatedDepth] = {}
     for c, fl in frames.items():
@@ -181,6 +198,7 @@ def acquire_with_report(
         vs = np.zeros(zs.shape, dtype=bool)
         with stage("depth"):
             for i, f in enumerate(fl):
+                say(f"depth: camera {c}, frame {i + 1}/{len(fl)}")
                 r = backends[c].infer(f)
                 zs[i], vs[i] = r.z_depth_m, r.valid
                 fit = getattr(backends[c], "last_fit", None)
@@ -200,6 +218,7 @@ def acquire_with_report(
     fr = cfg["fusion_roi"]
     roi_f = AABB(np.asarray(fr["min"], float), np.asarray(fr["max"], float))
     h = float(_val(cfg["voxel_size"]))
+    say("fusing depth (TSDF)")
     with stage("tsdf"):
         vol = TSDFVolume(roi_f, h, float(cfg["truncation_voxels"]), device)
         for c in cals:
@@ -210,12 +229,14 @@ def acquire_with_report(
     if len(sp.pos) < 10:
         raise ReconstructionError(f"fusion produced only {len(sp.pos)} surface samples (anchoring or ROI wrong?)")
     s = float(grid_cfg["surfel_spacing"])
+    say("finding the table and objects")
     with stage("objects"):
         plane = fit_table_plane(sp.pos, sp.normal, sp.footprint, cfg)
         if not plane.agrees:
             warnings.append(f"table plane deviates {1e3 * plane.z_dev_m:.1f} mm from z = 0")
         lab = cluster_objects(sp.pos, sp.normal, sp.footprint, plane, cfg, s)
         keep = lab != DROPPED
+    say("building the scene snapshot")
     with stage("snapshot"):
         roi_g = AABB(np.asarray(grid_cfg["roi_min"], float), np.asarray(grid_cfg["roi_max"], float))
         vp = ViewPoints(sp.pos[keep], sp.normal[keep], lab[keep], sp.footprint[keep], np.ones(int(keep.sum()), bool))
@@ -283,4 +304,4 @@ def acquire_snapshot(
     return acquire_with_report(sources, calibration, depth_backend, cfg, **kwargs).snapshot
 
 
-__all__ = ["AcquisitionResult", "acquire_snapshot", "acquire_with_report", "collect_frames"]
+__all__ = ["AcquisitionResult", "acquire_snapshot", "acquire_with_report", "collect_frames", "prepare_frame"]

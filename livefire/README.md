@@ -13,7 +13,7 @@ heat or flame.
 | Phase | What | State |
 | --- | --- | --- |
 | P0 | Contracts and a synthetic two-camera vertical slice (sim, gas solver, renderer, replay, benchmarks) | Done, Gate 0 approved |
-| P1 | Real cameras: live capture, click-to-ignite, ChArUco calibration, depth, fusion, live mode | In progress: capture, click-to-ignite (synthetic scene), calibration, depth and acquisition are built; **live mode on real cameras (P1-006) is not built yet** |
+| P1 | Real cameras: live capture, click-to-ignite, ChArUco calibration, depth, fusion, live mode | In progress: capture, click-to-ignite, calibration, depth, acquisition and live mode (`live`) are built; **live mode has only been tested on synthetic clips, never on real cameras or the GPU** |
 | P2-P5 | Simulation quality, scene understanding, visual fidelity and performance, final evaluation | Not started |
 
 Everything so far was developed and tested on a CPU-only Linux machine. Nothing has run on a GPU or on Windows yet;
@@ -23,6 +23,7 @@ treat the GPU and Windows paths as untested.
 
 | Feature | Command |
 | --- | --- |
+| **Live mode: your cameras, click the feed to start a virtual fire** (needs calibration first, see "Live mode") | `uv run python -m livefire.app live` |
 | Click on the synthetic scene to start fires | `uv run python -m livefire.app interactive --scene table_v1` |
 | Offline two-view fire demo video | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
 | See your cameras (fps, frame age, skew, status) and record clips | `uv run python -m livefire.app capture` (add `--record data/clips/run1 --seconds 10`) |
@@ -62,6 +63,7 @@ column. No code path shells out to bash.
 | `make lint` | `uv run ruff check src tests bench` | lint |
 | `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` | offline demo video `out/demo/composite.mp4` |
 | `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` | real-time run (needs a GPU to be real time) |
+| `make live` | `uv run python -m livefire.app live` | live mode on your cameras (extra options: `make live LIVE_ARGS="--depth da2_relative_small --grid 48"`) |
 | `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` | click-to-ignite viewer |
 | `make capture` | `uv run python -m livefire.app capture` | live camera check |
 | `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` | camera check without a window |
@@ -107,7 +109,48 @@ Mouse: left click ignites at the clicked surface (empty background and non-flamm
 right click selects an object. Keys: `1`-`8` set the selected object's material (paper, cloth, wood, plastic, metal,
 glass, ceramic, other_nonflammable), `space` pause, `+`/`-` ignition radius, `o` geometry overlay, `v` single/dual view,
 `r` re-acquire, `s` screenshot, `q` quit. `--out DIR` sets where screenshots go; `--record` saves a replayable session.
-Today this runs on the synthetic scene; on real cameras it arrives with live mode (P1-006).
+This viewer runs on the synthetic scene; live mode (below) uses the same controller on your cameras.
+
+## Live mode (your cameras)
+
+All fire is virtual: the simulation runs on a frozen 3D snapshot of your table and is composited over the live camera
+frames. Real objects are never heated or ignited.
+
+**What you do, once:**
+
+1. Print the board, measure a square, set `square_length_m`, calibrate each camera, then run `calib extrinsics` with the
+   board flat on the table (see Calibration). Keep camera resolution unchanged afterwards.
+2. List your cameras in `configs/cameras.yaml` (USB index, or the phone's `http://<ip>:8080/video`). The cam_ids must match
+   the calibration. Check them with `uv run python -m livefire.app capture`.
+3. Install the depth model (needs internet once, then cached): `uv sync --all-groups --all-extras`. Metric depth
+   (`da2_metric_small`) is the default; `--depth da2_relative_small` is the alternative. Set `device: "cuda:0"` in
+   `configs/app.yaml` on the RTX 4060.
+
+**Each session:**
+
+1. Put objects on the table (paper, wood, metal ...) inside the area both cameras see. Remove the board or leave it flat.
+   Do not touch the scene or the cameras from here on.
+2. `uv run python -m livefire.app live` (Windows without make) or `make live`.
+3. The window walks through CALIBRATING (checks the stored calibration against the board if it is visible; a warning in the
+   HUD means "recalibrate"), ACQUIRING (about 5 s collecting frames, then depth and fusion; progress is shown), READY,
+   then SIMULATING.
+4. Left click on an object in either view to start a fire there. Objects default to **paper** (flagged REQUIRES REVIEW):
+   right click an object, press `1`-`8` to set its real material (1 paper, 2 cloth, 3 wood, 4 plastic, 5 metal, 6 glass,
+   7 ceramic, 8 non-flammable); metal and glass will not ignite. `+`/`-` change the ignition radius, `space` pauses,
+   `v` toggles single/dual view, `s` saves a screenshot, `q` or Esc quits.
+5. **`o` shows the geometry overlay**: the reconstructed surface drawn on each live view (colour = material). It should hug
+   the real objects; if it floats or is offset, recalibrate or re-check camera placement before trusting the fire.
+6. If a person or object moves in the static scene for about a third of a second the HUD shows
+   **"scene changed: press r to re-acquire"** and the simulation pauses. `r` re-acquires (fire resets); `space`
+   continues on the old snapshot. If a camera is down for 3 s it is dropped and the HUD says DEGRADED (single view); it
+   comes back when it reconnects.
+7. The HUD shows capture-to-display latency, frame age, simulation lag and fps. Each run writes `out/live/live_<time>/`
+   with `latency.csv` (one row per camera per frame), `events.jsonl` (clicks, material changes), `summary.json` and
+   screenshots. Glass-to-glass latency is measured separately with `latency-timer` (see Capture).
+
+Limits today: fire spreads only within the clicked object (no radiation between objects yet); geometry accuracy from
+single-image depth is unverified on real data; all thresholds in `configs/live.yaml` are untuned defaults; a live session
+cannot be replayed with `replay` (the snapshot comes from your cameras and is not stored).
 
 ## Configuration
 
@@ -116,6 +159,7 @@ Today this runs on the synthetic scene; on real cameras it arrives with live mod
 | `configs/app.yaml` | seed, device (`cpu` / `cuda:0`), sim time step |
 | `configs/cameras.yaml` | live camera sources |
 | `configs/calibration.yaml` | ChArUco board and calibration settings |
+| `configs/live.yaml` | live mode: calibration check, change monitor, camera drop (untuned defaults) |
 | `configs/depth.yaml` | depth model and table-plane anchoring |
 | `configs/acquisition.yaml` | acquisition window, TSDF fusion, object clustering, default materials |
 | `configs/grid.yaml` | region of interest and gas grid resolution |

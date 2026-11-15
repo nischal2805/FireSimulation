@@ -1,0 +1,7 @@
+metric,scope,value,unit,n,note
+mae_m,synthetic_cam0,0.002140204496320304,m,335117,"synthetic table_v1, oracle depth, CPU; ROI pixels only"
+absrel,synthetic_cam0,0.0016451280215282595,-,335117,"synthetic table_v1, oracle depth, CPU; ROI pixels only"
+completeness,synthetic_cam0,0.9957149294127126,-,335117,"synthetic table_v1, oracle depth, CPU; ROI pixels only"
+mae_m,synthetic_cam1,0.0021342644311494767,m,391946,"synthetic table_v1, oracle depth, CPU; ROI pixels only"
+absrel,synthetic_cam1,0.001749235001040501,-,391946,"synthetic table_v1, oracle depth, CPU; ROI pixels only"
+completeness,synthetic_cam1,0.9997882361345696,-,391946,"synthetic table_v1, oracle depth, CPU; ROI pixels only"

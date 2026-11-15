@@ -1,0 +1,12 @@
+metric,scope,value,unit,threshold,status,note
+distance_to_table_centre,cam0,1.51657508881031,m,1.0-1.5 (recommended),info,
+in_frame_fraction,cam0,0.9477083333333334,-,,info,
+valid_coverage,cam0,1.0,-,>= 0.8,pass,in-frame table samples with valid frozen depth / in-frame table samples
+visible_fraction,cam0,0.7491666666666666,-,>= 0.3,pass,"table samples in frame, valid depth and not hidden / all table samples"
+distance_to_table_centre,cam1,1.4115594213493106,m,1.0-1.5 (recommended),info,
+in_frame_fraction,cam1,0.9489583333333333,-,,info,
+valid_coverage,cam1,0.9997804610318332,-,>= 0.8,pass,in-frame table samples with valid frozen depth / in-frame table samples
+visible_fraction,cam1,0.74,-,>= 0.3,pass,"table samples in frame, valid depth and not hidden / all table samples"
+camera_angle,cam0-cam1,66.75123298094722,deg,40.0-100.0,pass,3-D angle at the table-area centre between the two camera positions
+shared_fraction,all,0.66625,-,>= 0.5,pass,table samples visible in every camera / all table samples
+table_samples,all,4800.0,count,,info,"region x0,y0,x1,y1 = -0.800,-0.600,0.800,0.600 m"

@@ -1,0 +1,25 @@
+metric,scope,value,unit,n,note
+landmarks_total,all,48.0,count,48,
+reconstructed_fraction,all,1.0,-,48,landmarks whose pixel had valid frozen depth
+err_median_cm,all,2.0131437738384177,cm,48,depth is anchored to the table plane over the board footprint: board corners are not fully independent
+err_mean_cm,all,2.011559096614764,cm,48,
+err_p95_cm,all,2.0454461279906035,cm,48,
+err_max_cm,all,2.053354373067997,cm,48,
+err_z_median_cm,all,-1.529102441408578,cm,48,"signed, reconstructed minus known"
+meets_m6,all,1.0,bool,48,median error < 3 cm
+landmarks_total,cam0,24.0,count,24,
+reconstructed_fraction,cam0,1.0,-,24,landmarks whose pixel had valid frozen depth
+err_median_cm,cam0,2.010032331784589,cm,24,depth is anchored to the table plane over the board footprint: board corners are not fully independent
+err_mean_cm,cam0,2.0077525832842684,cm,24,
+err_p95_cm,cam0,2.0306595613044083,cm,24,
+err_max_cm,cam0,2.053354373067997,cm,24,
+err_z_median_cm,cam0,-1.5162595882442758,cm,24,"signed, reconstructed minus known"
+meets_m6,cam0,1.0,bool,24,median error < 3 cm
+landmarks_total,cam1,24.0,count,24,
+reconstructed_fraction,cam1,1.0,-,24,landmarks whose pixel had valid frozen depth
+err_median_cm,cam1,2.013630190392199,cm,24,depth is anchored to the table plane over the board footprint: board corners are not fully independent
+err_mean_cm,cam1,2.0153656099452593,cm,24,
+err_p95_cm,cam1,2.0467267846243855,cm,24,
+err_max_cm,cam1,2.049587851209312,cm,24,
+err_z_median_cm,cam1,-1.5345498516107696,cm,24,"signed, reconstructed minus known"
+meets_m6,cam1,1.0,bool,24,median error < 3 cm

@@ -13,6 +13,10 @@ def main(argv: list[str] | None = None) -> int:
         from livefire.app.calib_cli import main as calib_main
 
         return calib_main(raw[1:])
+    if raw and raw[0] == "measure":  # M4 tape-measure tool (P1-007) has its own parser
+        from livefire.app.measure_cli import main as measure_main
+
+        return measure_main(raw[1:])
     ap = argparse.ArgumentParser(prog="livefire.app", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the synthetic scene and record a composite video")

@@ -1,4 +1,4 @@
-.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval eval-acquire measure eval-placement eval-alignment eval-mae eval-latency
 
 setup:
 	uv sync --all-groups --all-extras
@@ -10,7 +10,7 @@ test-slow:
 	uv run pytest -q
 
 lint:
-	uv run ruff check src tests bench
+	uv run ruff check src tests bench eval
 
 # CPU-friendly offline demo; override e.g. `make run RUN_ARGS='--grid 64 --offline --seconds 10 --ignite ...'`
 RUN_ARGS ?= --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"
@@ -36,8 +36,34 @@ CALIB_ARGS ?= board --out board.png --dpi 300
 calibrate:
 	uv run python -m livefire.app calib $(CALIB_ARGS)
 
+# Gate 1 evaluation tools (P1-007, docs/RUNBOOK_P1.md). `make eval` = no-hardware self-check of every tool on synthetic data
+# (writes eval/results/*synthetic*.csv). On your rig: eval-acquire once, then the others with EVAL_ARGS="--bundle <acquisition.npz>".
 eval:
-	@echo "not implemented until P1"; exit 2
+	uv run python eval/placement.py --synthetic
+	uv run python eval/alignment.py --selftest
+	uv run python eval/geometry_mae.py --synthetic
+
+# Acquire the real scene once (cameras + active calibration) and save out/eval/acq_<time>/acquisition.npz
+eval-acquire:
+	uv run python -m livefire.app measure --acquire-only $(EVAL_ARGS)
+
+# M4: click pairs of points, type the tape distance (cm); e.g. make measure EVAL_ARGS="--bundle out/eval/acq_x/acquisition.npz"
+measure:
+	uv run python -m livefire.app measure $(EVAL_ARGS)
+
+eval-placement:
+	uv run python eval/placement.py $(EVAL_ARGS)
+
+eval-alignment:
+	uv run python eval/alignment.py $(EVAL_ARGS)
+
+# e.g. make eval-mae EVAL_ARGS="--pairs out/eval/measure_x/pairs.csv --label desk1"
+eval-mae:
+	uv run python eval/geometry_mae.py $(EVAL_ARGS)
+
+# e.g. make eval-latency EVAL_ARGS="out/live/live_x/latency.csv --label rtx4060"
+eval-latency:
+	uv run python eval/latency.py $(EVAL_ARGS)
 
 # Live mode: active calibration + cameras in configs/cameras.yaml -> acquire -> simulate on live frames, click to ignite.
 # e.g. make live LIVE_ARGS="--depth da2_relative_small --grid 48"

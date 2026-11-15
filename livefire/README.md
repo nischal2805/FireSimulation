@@ -60,7 +60,7 @@ column. No code path shells out to bash.
 | `make setup` | `uv sync --all-groups --all-extras` | create `.venv` and install everything |
 | `make test` | `uv run pytest -m "not slow" -q` | fast tests |
 | `make test-slow` | `uv run pytest -q` | all tests incl. the 10-minute-simulated stability run |
-| `make lint` | `uv run ruff check src tests bench` | lint |
+| `make lint` | `uv run ruff check src tests bench eval` | lint |
 | `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` | offline demo video `out/demo/composite.mp4` |
 | `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` | real-time run (needs a GPU to be real time) |
 | `make live` | `uv run python -m livefire.app live` | live mode on your cameras (extra options: `make live LIVE_ARGS="--depth da2_relative_small --grid 48"`) |
@@ -69,6 +69,13 @@ column. No code path shells out to bash.
 | `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` | camera check without a window |
 | `make latency-timer` | `uv run python -m livefire.app latency-timer` | on-screen ms counter for glass-to-glass latency |
 | `make calibrate` | `uv run python -m livefire.app calib board --out board.png --dpi 300` | print-ready board (other `calib` subcommands below) |
+| `make eval` | `uv run python eval/placement.py --synthetic` then `uv run python eval/alignment.py --selftest` then `uv run python eval/geometry_mae.py --synthetic` | no-hardware self-check of the Gate 1 tools on synthetic data (CSVs in `eval/results/`) |
+| `make eval-acquire` | `uv run python -m livefire.app measure --acquire-only` | acquire your real scene once, save `out/eval/acq_<time>/acquisition.npz` |
+| `make measure` | `uv run python -m livefire.app measure --bundle out/eval/acq_<time>/acquisition.npz` | M4: click two points, type the tape distance (cm), saves `pairs.csv` |
+| `make eval-placement` | `uv run python eval/placement.py --bundle out/eval/acq_<time>/acquisition.npz` | camera placement study (angle, shared area, depth coverage); exit 1 with guidance if poor |
+| `make eval-alignment` | `uv run python eval/alignment.py --bundle out/eval/acq_<time>/acquisition.npz` | M6: board corners reconstructed vs known |
+| `make eval-mae` | `uv run python eval/geometry_mae.py --pairs out/eval/measure_<time>/pairs.csv` | M4: MAE in cm from the measured pairs |
+| `make eval-latency` | `uv run python eval/latency.py out/live/live_<time>/latency.csv` | M2: latency statistics from a live run |
 | `make bench` | `uv run python bench/run_bench.py` | benchmarks to `bench/results/*.csv` |
 | `make bench-spike` | `uv run python bench/spike/run_spike.py` | Warp vs Taichi kernel spike (decides ADR-0001) |
 | `make plots` | `uv run python bench/plots.py` | plots from the CSVs |
@@ -101,7 +108,14 @@ PC and take a screenshot: latency = live counter minus the counter visible in th
    (averages 15 frames per camera). World origin = board centre, +Z up, table plane z = 0.
 4. The result is `data/calib/calib_vNNN.yaml` and becomes active. Changing camera resolution requires recalibration.
 
-Camera placement: 60-90 degrees apart, 1-1.5 m from the table, both seeing the table.
+Camera placement: 60-90 degrees apart, 1-1.5 m from the table, both seeing the table. `eval/placement.py` checks it.
+
+## Gate 1 measurements
+
+The step-by-step procedure (print the board, place the cameras, calibrate, run live, measure M2/M4/M6, which files to send
+back) is in [`docs/RUNBOOK_P1.md`](docs/RUNBOOK_P1.md). The tools are `eval/placement.py`, `eval/alignment.py`,
+`eval/geometry_mae.py`, `eval/latency.py` and `python -m livefire.app measure`; results go to `eval/results/`.
+Pass a region that starts with a minus sign as `--region=-0.6,-0.4,0.6,0.4`.
 
 ## Interactive viewer (click to ignite)
 

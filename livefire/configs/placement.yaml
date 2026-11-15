@@ -1,0 +1,16 @@
+# Camera placement study (P1-007; PRD 7.1). ALL VALUES ARE UNTUNED DEFAULTS chosen for a desktop scene with two cameras
+# 1-1.5 m from the table; tune them on the real rig (docs/RUNBOOK_P1.md). Reads from `eval/placement.py`.
+placement:
+  min_shared_fraction: {value: 0.5, unit: "-", range: [0.05, 1.0], status: artistic}   # table area seen by ALL cameras / table area, below this the placement fails
+  min_valid_coverage: {value: 0.8, unit: "-", range: [0.1, 1.0], status: artistic}     # per camera: table samples in frame that have valid (non-hole) depth, below this fails
+  min_visible_fraction: {value: 0.3, unit: "-", range: [0.0, 1.0], status: artistic}   # per camera: table area visible (in frame, valid, unoccluded) / table area, below this fails
+  angle_min_deg: {value: 40.0, unit: "deg", range: [5.0, 90.0], status: artistic}      # angle between camera pairs at the table centre, outside [min, max] fails
+  angle_max_deg: {value: 100.0, unit: "deg", range: [60.0, 175.0], status: artistic}
+  angle_rec_min_deg: {value: 60.0, unit: "deg", range: [5.0, 90.0], status: artistic}  # recommended band (README); outside it only warns
+  angle_rec_max_deg: {value: 90.0, unit: "deg", range: [60.0, 175.0], status: artistic}
+  distance_rec_min_m: {value: 1.0, unit: "m", range: [0.2, 5.0], status: artistic}     # recommended camera-to-table-centre distance; outside only warns
+  distance_rec_max_m: {value: 1.5, unit: "m", range: [0.2, 5.0], status: artistic}
+  visible_depth_tol_m: {value: 0.03, unit: "m", range: [0.005, 0.2], status: artistic}  # a table sample counts as visible if the frozen depth at its pixel is within this of its range (else something is in front of it)
+  sample_spacing_m: {value: 0.02, unit: "m", range: [0.005, 0.1], status: artistic}     # table sample grid spacing
+  # Table area under study: null = the XY footprint of acquisition.fusion_roi (configs/acquisition.yaml); or [x0, y0, x1, y1] metres.
+  region_xy_m: null

@@ -1,0 +1,77 @@
+# Scripted and randomized spread scenarios (P2-003, P2R11). Evaluation setup, not simulation parameters: plain values,
+# units in the key names (_m metres, _deg degrees, _s seconds, _m_s metres per second). Not read by load_params.
+# Own ROI: a 0.96 m cube with G=32 (h = 3 cm), world frame, metres. neighbor_radius_factor / neighbor_k_max are taken
+# from configs/grid.yaml.
+grid: {G: 32, roi_min: [-0.48, -0.48, -0.05], roi_max: [0.48, 0.48, 0.91], surfel_spacing: 0.015}
+t_max_s: 20.0          # simulated seconds per run (non-ignition within t_max_s counts as +inf)
+dt_check_steps: 6      # cadence (steps) of the diagnostics: max T_g, burnt set, extinction test
+# Randomized split (PRD 11.1 M9): scenario i of a split uses seed seed_<split> + i; the seed ranges are disjoint.
+# Geometry: emitter paper sheet in the plane y = 0 facing +y, target sheet at distance gap_m (nearest edge), tilted by
+# angle_deg about a vertical hinge (0 = parallel and facing the emitter); square sheets of side size_m (drawn
+# separately for emitter and target); wind from the -x wall.
+random:
+  n_dev: 12
+  n_heldout: 12
+  seed_dev: 100
+  seed_heldout: 900
+  gap_m: [0.02, 0.12]
+  angle_deg: [0, 60]
+  size_m: [0.06, 0.16]
+  wind_m_s: [0.0, 0.8]
+  ignite_radius_m: 0.04
+materials_compared: [paper, cloth, wood, plastic]   # material set on the target object only
+# Scripted scenarios (demo scripts, not validation). Primitives: rect {axis, offset, lo, hi, normal_sign} (extents
+# along the two remaining axes in increasing axis order, as scene.synthetic.Rect) or box {lo, hi}. `target` is the
+# object whose material M9 swaps. Material of the listed objects is the scenario's own (used by the ablation).
+scripted:
+  # PRD 13 demo order on a small bench: paper sheet, cloth 3 cm beyond it, wood block 4 cm beyond the cloth, then a
+  # metal cup, a glass and a ceramic mug (boxes) beside the chain.
+  - name: demo_chain
+    target: cloth_sheet
+    ignite: {point: [0.0, 0.0, 0.11], radius_m: 0.04}
+    wind_m_s: 0.0
+    objects:
+      - {name: paper_sheet, kind: rect, material: paper, axis: 1, offset: 0.0, lo: [-0.06, 0.05], hi: [0.06, 0.17], normal_sign: 1}
+      - {name: cloth_sheet, kind: rect, material: cloth, axis: 1, offset: 0.03, lo: [-0.06, 0.05], hi: [0.06, 0.17], normal_sign: -1}
+      - {name: wood_block, kind: box, material: wood, lo: [-0.06, 0.07, 0.05], hi: [0.06, 0.13, 0.17]}
+      - {name: metal_cup, kind: box, material: metal, lo: [0.10, -0.02, 0.0], hi: [0.16, 0.04, 0.08]}
+      - {name: glass, kind: box, material: glass, lo: [-0.16, -0.02, 0.0], hi: [-0.10, 0.04, 0.08]}
+      - {name: ceramic_mug, kind: box, material: ceramic, lo: [-0.03, -0.12, 0.0], hi: [0.03, -0.06, 0.08]}
+  - name: two_sheets_parallel
+    target: target_sheet
+    ignite: {point: [0.0, 0.0, 0.11], radius_m: 0.04}
+    wind_m_s: 0.0
+    objects:
+      - {name: emitter_sheet, kind: rect, material: paper, axis: 1, offset: 0.0, lo: [-0.06, 0.05], hi: [0.06, 0.17], normal_sign: 1}
+      - {name: target_sheet, kind: rect, material: cloth, axis: 1, offset: 0.05, lo: [-0.06, 0.05], hi: [0.06, 0.17], normal_sign: -1}
+  # Stress case added by P2-003 (not in the brief's list): large parallel sheets 3 cm apart, the whole emitter lit, so
+  # that the slower targets (plastic, wood) are also within reach and the partial order is exercised end to end.
+  - name: two_sheets_large
+    target: target_sheet
+    ignite: {point: [0.0, 0.0, 0.20], radius_m: 0.3}
+    wind_m_s: 0.0
+    objects:
+      - {name: emitter_sheet, kind: rect, material: paper, axis: 1, offset: 0.0, lo: [-0.15, 0.05], hi: [0.15, 0.35], normal_sign: 1}
+      - {name: target_sheet, kind: rect, material: cloth, axis: 1, offset: 0.03, lo: [-0.15, 0.05], hi: [0.15, 0.35], normal_sign: -1}
+  - name: sheet_over_block
+    target: block
+    ignite: {point: [0.0, 0.0, 0.14], radius_m: 0.04}
+    wind_m_s: 0.0
+    objects:
+      - {name: emitter_sheet, kind: rect, material: paper, axis: 2, offset: 0.14, lo: [-0.06, -0.06], hi: [0.06, 0.06], normal_sign: -1}
+      - {name: block, kind: box, material: wood, lo: [-0.06, -0.06, 0.0], hi: [0.06, 0.06, 0.10]}
+# Demo ignition of `make run` / `make run-rt` (ADR-0006 addendum): point [m], radius [m], time [s]. `grid_g` is the
+# `make run` grid. compare: the (T_rad_flame [K], ignition radius [m]) combinations measured by
+# eval/p2_ablation_uniform.py --part demo (the first entry is the state before P2-003).
+demo_ignition:
+  point: [-0.075, 0.0, 0.1]
+  radius_m: 0.08
+  time_s: 0.3
+  grid_g: 48
+  compare:
+    - {T_rad_flame: 1100, radius_m: 0.06}
+    - {T_rad_flame: 1100, radius_m: 0.09}
+    - {T_rad_flame: 1400, radius_m: 0.06}
+    - {T_rad_flame: 1400, radius_m: 0.08}
+    - {T_rad_flame: 1400, radius_m: 0.09}
+    - {T_rad_flame: 1400, radius_m: 0.12}

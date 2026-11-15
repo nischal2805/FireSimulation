@@ -13,6 +13,7 @@ from livefire.perception.material.types import MATERIAL_CLASSES
 _FUEL = ("m0_areal", "T_ign", "t_delay", "mdot_ref", "dH", "chi", "char_yield", "y_soot", "consumed_when_burnt")
 _COMMON = ("rho", "c", "k", "delta", "eps", "status")
 _STATUSES = {"physical_estimate", "artistic"}
+_DETAIL_KEYS = ("thermal", "ignition", "combustion", "radiation")  # P2R8 status_detail groups
 
 
 
@@ -22,7 +23,12 @@ class MaterialTable:
     Per-id float64 NumPy arrays (SI units, see materials.yaml header): rho, c, k, delta, eps,
     m0, m_res, T_ign, t_delay, mdot_ref, dH, chi, y_soot; bool arrays: flammable, consumed.
     Non-flammable ids have all fuel quantities 0 (m0 = m_res = 0). ``m_res = m0 * char_yield``
-    (residual char mass, kg/m^2). Arrays are read-only."""
+    (residual char mass, kg/m^2). Arrays are read-only.
+
+    Optional per-material ``status_detail`` (P2R8): mapping of the groups thermal (rho, c, k, delta), ignition
+    (T_ign, t_delay), combustion (m0_areal, mdot_ref, dH, chi, char_yield, y_soot, consumed_when_burnt) and
+    radiation (eps) to a status; unknown keys or statuses raise ConfigError, absence is accepted. Exposed as
+    ``status_detail`` (list of dicts, per id; empty dict when absent)."""
 
     def __init__(self, entries: dict[str, dict[str, Any]]) -> None:
         if list(entries) != list(MATERIAL_CLASSES):
@@ -36,6 +42,7 @@ class MaterialTable:
         self.flammable = np.zeros(n, dtype=bool)
         self.consumed = np.zeros(n, dtype=bool)
         self.status: list[str] = []
+        self.status_detail: list[dict[str, str]] = []
         for i, name in enumerate(MATERIAL_CLASSES):
             e = entries[name]
             if not isinstance(e, dict):
@@ -52,6 +59,7 @@ class MaterialTable:
             if not 0 <= e["eps"] <= 1:
                 raise ConfigError(f"{name}: eps must be in [0,1]")
             self.status.append(e["status"])
+            self.status_detail.append(self._detail(name, e.get("status_detail")))
             self.rho[i], self.c[i], self.k[i] = e["rho"], e["c"], e["k"]
             self.delta[i], self.eps[i] = e["delta"], e["eps"]
             fuel_present = [f for f in _FUEL if f in e]
@@ -78,6 +86,20 @@ class MaterialTable:
         for a in vars(self).values():
             if isinstance(a, np.ndarray):
                 a.flags.writeable = False
+
+    @staticmethod
+    def _detail(name: str, d: Any) -> dict[str, str]:
+        if d is None:
+            return {}
+        if not isinstance(d, dict):
+            raise ConfigError(f"{name}: status_detail must be a mapping")
+        bad = [k for k in d if k not in _DETAIL_KEYS]
+        if bad:
+            raise ConfigError(f"{name}: unknown status_detail keys {bad}; allowed {list(_DETAIL_KEYS)}")
+        for k, v in d.items():
+            if v not in _STATUSES:
+                raise ConfigError(f"{name}: status_detail.{k} must be one of {sorted(_STATUSES)}, got {v!r}")
+        return dict(d)
 
     @staticmethod
     def _num(name: str, field: str, v: Any, allow_zero: bool = False) -> None:

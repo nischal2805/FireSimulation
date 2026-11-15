@@ -1,5 +1,6 @@
 # Benchmark workloads (PRD 11.4, Appendix C). Changing anything below requires bumping workload_version.
-workload_version: 1
+workload_version: 2   # P2R7 (P2-002): the default rad_mode changed (ADR-0006), so every coupled workload now includes radiation.
+# Version 1 = bench/results/baseline_cpu_2026-11-14.csv (no radiation); the GPU baseline is to be rerun by the user.
 scene: table_v1
 # Paper-burning ignition used by every workload: world point [m], radius [m] (same as `make run`).
 ignite: {point: [-0.075, 0.0, 0.1], radius: 0.06}

@@ -84,24 +84,38 @@ def test_anchoring_and_geometry(two_cam):
     assert np.percentile(d, 95) < 0.01, np.percentile(d, 95)
 
 
-def test_objects_and_membership(two_cam):
-    snap = two_cam.snapshot
-    d = _truth_dist(snap.pos)  # columns follow SCENE.objects order (obj_id 0..4)
-    # membership: fraction of a cluster's elements whose nearest analytic surface belongs to the matched truth object
-    near = d.argmin(1)
-    truth_of = {}
+def _membership(snap):
+    """``{snapshot obj_id: (matched truth id, membership rate)}`` for every non-table object."""
+    near = _truth_dist(snap.pos).argmin(1)  # columns follow SCENE.objects order (obj_id 0..4)
+    out = {}
     for o in sorted(set(snap.obj_id.tolist()) - {0}):
         m = snap.obj_id == o
         rates = np.bincount(near[m], minlength=5) / m.sum()
         tid = int(np.argmax(np.where(np.arange(5) == 0, 0, rates)))
-        truth_of[o] = tid
-        assert rates[tid] > 0.9, (o, rates)
+        out[o] = (tid, float(rates[tid]))
+    return out, near
+
+
+def test_objects_and_membership(two_cam):
+    snap = two_cam.snapshot
+    found, near = _membership(snap)
+    for o, (_tid, rate) in found.items():
+        assert rate > 0.9, (o, found)
     # wood (1), metal (2), paper (3) are found. The cloth patch (4) lies 3 mm above the table: below the table-plane
-    # tolerance (and the depth noise), so it merges with the table (documented limit of geometric clustering, P1R4).
-    assert sorted(truth_of.values()) == [1, 2, 3]
+    # tolerance (and the depth noise), so it merges with the table (P1 deviation, see test_cloth_separated_from_table).
+    assert sorted(t for t, _ in found.values()) == [1, 2, 3]
     assert len(snap.objects) == 4
     top = (snap.obj_id == 0) & (snap.normal[:, 2] > 0.9)
     assert np.isin(near[top], [0, 4]).mean() > 0.9  # cloth lies on the table
+
+
+@pytest.mark.xfail(
+    strict=True, reason="P1 deviation: low-profile cloth merges into table plane; needs P3 segmentation"
+)
+def test_cloth_separated_from_table(two_cam):
+    """The brief requires 4 objects + table: the cloth (truth id 4) as its own object with > 90 % membership."""
+    found, _ = _membership(two_cam.snapshot)
+    assert any(t == 4 and rate > 0.9 for t, rate in found.values()), found
 
 
 def test_snapshot_contract_and_materials(two_cam):
@@ -145,7 +159,16 @@ def test_single_camera():
         for s in srcs:
             s.stop()
     snap = r.snapshot
-    assert set(snap.view_depth) == {0} and len(snap.objects) >= 2
+    assert set(snap.view_depth) == {0}
+    found, _ = _membership(snap)
+    assert sorted(t for t, _ in found.values()) == [1, 2, 3] and len(snap.objects) == 4
+    for o, (_tid, rate) in found.items():
+        assert rate > 0.9, (o, found)
+    for o in snap.objects:
+        assert set(o.observations.keys()) <= {0}
+    assert r.report["plane"]["agrees"] and r.report["plane"]["z_dev_mm"] < 5.0
+    top = (snap.obj_id == 0) & (snap.normal[:, 2] > 0.9) & (np.abs(snap.pos[:, 0]) < 0.7) & (np.abs(snap.pos[:, 1]) < 0.4)
+    assert np.abs(np.median(snap.pos[top, 2])) < 5e-3
     d = _truth_dist(snap.pos).min(1)
     assert np.percentile(d, 95) < 0.015
 

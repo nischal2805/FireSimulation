@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from livefire.common.geometry import AABB, CameraCalibration, look_at, make_K
+from livefire.common.geometry import AABB, CameraCalibration, look_at, make_K, ray_dirs_camera
 from livefire.fusion.accumulate import accumulate_depth
 from livefire.fusion.extract import extract_surface
 from livefire.fusion.objects import DROPPED, cluster_objects, fit_table_plane, load_acquisition_config
@@ -40,8 +40,6 @@ def test_tsdf_plane_and_extraction():
     vol = TSDFVolume(roi, 0.01, 3.0, "cpu")
     for pos in ((0.3, -0.4, 0.8), (-0.4, 0.2, 0.7)):
         c = _cam(pos)
-        from livefire.common.geometry import ray_dirs_camera
-
         d = ray_dirs_camera(c) @ c.T_world_from_camera[:3, :3].T
         t = -c.center_world[2] / d[..., 2]  # Z-depth == ray parameter
         vol.integrate(c, t.astype(np.float32), np.ones_like(t, dtype=np.float32))
@@ -51,6 +49,22 @@ def test_tsdf_plane_and_extraction():
     assert np.abs(sp.pos[inner, 2]).max() < 2e-3
     assert sp.normal[inner, 2].min() > 0.99
     assert abs(sp.footprint[inner].sum() - 0.24**2) / 0.24**2 < 0.15  # footprints add up to the area
+
+
+def test_tsdf_confidence_weighted_average():
+    """Two observations of z = 0 at different depths and confidences: the zero crossing sits at the weighted mean."""
+    roi = AABB(np.array([-0.2, -0.2, -0.1]), np.array([0.2, 0.2, 0.2]))
+    vol = TSDFVolume(roi, 0.01, 3.0, "cpu")
+    c = _cam((0.01, 0.01, 0.8))
+    d = ray_dirs_camera(c) @ c.T_world_from_camera[:3, :3].T
+    t = (-c.center_world[2] / d[..., 2]).astype(np.float32)
+    for off, conf in ((0.006, 0.75), (-0.002, 0.25)):  # depth offsets (m) along the ray and their confidences
+        vol.integrate(c, t + np.float32(off), np.full_like(t, conf))
+    sp = extract_surface(vol.tsdf(), vol.weight(), vol.grid)
+    inner = (np.abs(sp.pos[:, 0]) < 0.1) & (np.abs(sp.pos[:, 1]) < 0.1)
+    assert inner.sum() > 100
+    # weighted mean offset +4 mm (unweighted would be +2 mm); a deeper surface lies lower: z ~ -4 mm * cos(view angle)
+    assert abs(np.median(sp.pos[inner, 2]) + 0.004) < 1e-3
 
 
 def test_plane_fit_and_clustering():

@@ -16,6 +16,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from livefire.common.config import load_yaml
+from livefire.common.errors import ReconstructionError
 from livefire.common.log import get_logger
 
 F64 = NDArray[np.float64]
@@ -46,13 +47,13 @@ def fit_table_plane(
     pos: F64, normal: F64, footprint: F64, cfg: dict[str, Any], seed: int | None = None
 ) -> PlaneFit:
     """RANSAC (area-weighted inlier count) over up-facing samples, then a least-squares refit on the inliers.
-    Warns (logging) if the plane disagrees with ``z = 0`` by more than ``plane_tol_m``; raises ``ValueError`` if
+    Warns (logging) if the plane disagrees with ``z = 0`` by more than ``plane_tol_m``; raises ``ReconstructionError`` if
     there is no up-facing surface at all."""
     pc = cfg["plane"]
     tol, inl = float(_val(pc["plane_tol_m"])), float(_val(pc["inlier_m"]))
     cand = np.flatnonzero(normal[:, 2] >= float(pc["min_normal_z"]))
     if len(cand) < 3:
-        raise ValueError("no up-facing surface samples: cannot fit the table plane")
+        raise ReconstructionError("no up-facing surface samples: cannot fit the table plane")
     rng = np.random.default_rng(int(pc["seed"]) if seed is None else seed)
     P, A = pos[cand], footprint[cand]
     best, best_score = None, -1.0
@@ -70,7 +71,7 @@ def fit_table_plane(
         if score > best_score:
             best, best_score = (n, d), score
     if best is None:
-        raise ValueError("RANSAC found no plane candidate")
+        raise ReconstructionError("RANSAC found no plane candidate")
     n, d = best
     for _ in range(3):  # least-squares refit on inliers
         m = np.abs(P @ n - d) <= inl
@@ -97,7 +98,7 @@ def cluster_objects(
     """Label every sample: ``0`` = table, ``1..`` = objects (largest area first), ``-2`` = dropped.
 
     Table = up-facing samples within ``inlier_m`` of the plane, plus components lying at or below the plane (the table
-    skirt: topmost point within ``inlier_m`` or area-weighted mean height <= 0). The remaining samples are linked when closer than ``radius_factor * spacing`` (the neighbour rule);
+    skirt: topmost point within ``inlier_m`` or area-weighted mean height <= 0). The remaining samples are linked when closer than ``max(radius_factor * spacing, 2 * voxel_size)`` (the neighbour rule);
     connected components with area (sum of footprints) below ``min_object_area_m2`` are dropped."""
     pc, cc = cfg["plane"], cfg["cluster"]
     inl = float(_val(pc["inlier_m"]))
@@ -108,7 +109,8 @@ def cluster_objects(
     rest = np.flatnonzero(~on_plane)
     if not len(rest):
         return lab
-    radius = float(cc["radius_factor"]) * spacing
+    # tie the link radius to the TSDF voxel size so coarse voxels do not fragment objects
+    radius = max(float(cc["radius_factor"]) * spacing, 2.0 * float(_val(cfg["voxel_size"])))
     pairs = cKDTree(pos[rest]).query_pairs(radius, output_type="ndarray")
     k = len(rest)
     g = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(k, k))

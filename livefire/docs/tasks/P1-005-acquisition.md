@@ -25,3 +25,7 @@
 **Acceptance:** tests pass; acquisition on recorded synthetic clips (VideoFileSource + Oracle) under
 `acquisition.seconds + 30 s` on CPU.
 
+**Deviation (P1, accepted):** the synthetic cloth patch lies 3 mm above the table, below the 1 % depth noise at the
+camera distance, so geometric clustering cannot separate it from the table plane. The acquisition therefore finds
+3 objects + table instead of the brief's 4 + table. `test_cloth_separated_from_table` records the real requirement as a
+strict xfail; P3 segmentation resolves it.

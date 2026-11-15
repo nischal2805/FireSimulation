@@ -58,6 +58,7 @@ def _cal_of(calibration: Any) -> tuple[dict[int, CameraCalibration], dict[int, A
     cams = getattr(calibration, "cameras", None)
     if cams is not None and all(hasattr(r, "calibration") for r in cams.values()):
         return {c: r.calibration for c, r in cams.items()}, {c: r.undistorter() for c, r in cams.items()}
+    log.warning("calibration given without undistorters: frames are assumed to be already undistorted")
     return dict(calibration), {}
 
 
@@ -236,7 +237,7 @@ def acquire_with_report(
         min_obs = int(cfg["min_view_observations"])
         for o in ids:
             p = sf.pos[sf.obj_id == o].astype(np.float64)
-            obs[o] = {c: o for c in cals if _observes(cals[c], p, acc[c], max(2 * h, 0.02)) >= min(min_obs, len(p))}
+            obs[o] = {c: o for c in cals if _observes(cals[c], p, acc[c], max(2 * h, 0.02)) >= min(min_obs, len(p)) and len(p) > 0}
         snap = snapshot_from_surfels(sf, views, mats, grid_cfg, version, names, observations=obs)
 
     total_ms = (time.perf_counter() - t_all) * 1e3

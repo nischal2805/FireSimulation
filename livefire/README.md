@@ -142,7 +142,7 @@ frames. Real objects are never heated or ignited.
    the real objects; if it floats or is offset, recalibrate or re-check camera placement before trusting the fire.
 6. If a person or object moves in the static scene for about a third of a second the HUD shows
    **"scene changed: press r to re-acquire"** and the simulation pauses. `r` re-acquires (fire resets); `space`
-   continues on the old snapshot. If a camera is down for 3 s it is dropped and the HUD says DEGRADED (single view); it
+   continues on the old snapshot. Re-acquiring resets the fire **and your material tags and selection** (tags that survive re-acquisition arrive with P3 segmentation). If one camera delivers no frames at start-up, live mode runs in single view (HUD: DEGRADED) and `r` re-acquires with it once it works. If a camera is down for 3 s it is dropped and the HUD says DEGRADED (single view); it
    comes back when it reconnects.
 7. The HUD shows capture-to-display latency, frame age, simulation lag and fps. Each run writes `out/live/live_<time>/`
    with `latency.csv` (one row per camera per frame), `events.jsonl` (clicks, material changes), `summary.json` and

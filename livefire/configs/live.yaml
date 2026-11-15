@@ -10,5 +10,6 @@ change:                         # change monitor: live frames vs the reference c
   footprint_threshold: {value: 0.03, unit: "-", range: [0.005, 0.5], status: artistic}  # composite vs input grey diff marking fire/smoke
   footprint_dilate_px: 2        # px at monitor resolution: margin around the fire/smoke footprint
   min_static_fraction: 0.2      # fewer static pixels than this (fire everywhere) -> no decision for that frame
+max_wall_dt_s: {value: 0.25, unit: "s", range: [0.05, 2.0], status: artistic}   # per-frame wall dt clamp: after a stall or a blocking re-acquire the sim does not fast-forward
 latency:
   window_frames: 120            # presented frames used for the HUD percentiles

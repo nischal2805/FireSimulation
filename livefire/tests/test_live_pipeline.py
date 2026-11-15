@@ -164,13 +164,16 @@ def test_calibration_verify_ok_high_and_no_board():
 
 def test_live_frames_are_undistorted_with_nonzero_distortion():
     calib, cal, rgb, T = _board_setup()
-    src = SyntheticCameraSource(0, rgb, 0, fps=100)  # raw lens image, calib_version 0
+    src = SyntheticCameraSource(0, rgb, 0, fps=0.2)  # raw lens image, calib_version 0; next frame only after 5 s
     src.start()
     try:
         pipe = LivePipeline({0: src}, calib, make_depth_factory("oracle"))
+        calls = []
+        real_apply = pipe.undist[0].apply
+        pipe.undist[0].apply = lambda im: (calls.append(1), real_apply(im))[1]  # MOCK: counting wrapper, same result
         f = pipe.frame_for(0)
         assert f.calib_version == 7 and f.rgb.shape == rgb.shape
-        assert pipe.frame_for(0).rgb is f.rgb or pipe.frame_for(0).seq >= f.seq  # cached per seq
+        assert pipe.frame_for(0) is f and pipe.frame_for(0).rgb is f.rgb and len(calls) == 1  # cached per (cam, seq)
         undist_rms = _rms(cal, SPEC, np.ascontiguousarray(f.rgb[..., ::-1]), T)
         raw_rms = _rms(cal, SPEC, np.ascontiguousarray(rgb[..., ::-1]), T)  # same pinhole model, no undistortion
     finally:
@@ -307,7 +310,41 @@ def test_overlay_toggle_draws_elements(rig):
     on = _step(pipe, 1).image
     pipe.key("o")
     assert pipe.ctl.overlay is False
-    assert np.abs(on.astype(int) - base.astype(int)).sum(axis=2).astype(bool).mean() > 0.002
+    diff = np.abs(on.astype(int) - base.astype(int)).sum(axis=2) > 30
+    body = diff[200:]  # below the HUD band
+    w = body.shape[1] // 2
+    assert body[:, :w].mean() > 0.002 and body[:, w:].mean() > 0.002, (body[:, :w].mean(), body[:, w:].mean())  # both panes
+
+
+def test_click_marker_and_selection_drawn_on_second_pane(rig):
+    pipe, *_ = rig
+    _step(pipe, 1)
+    snap = pipe.ctl.snap
+    uv, idx = project_elements(snap, 1)
+    obj = max((o.obj_id for o in snap.objects if o.obj_id), key=lambda o: (snap.obj_id == o).sum())
+    before = _step(pipe, 1).image.copy()
+    hit = None
+    for (u, v), i in zip(uv[::5], idx[::5]):
+        if snap.obj_id[i] == obj and snap.normal[i, 2] > 0.9:
+            x, y = pipe._layout.from_view(1, float(u), float(v))
+            r = pipe.click_display(round(x), round(y), "right")  # select (right) first: draws the selection on pane 1
+            if r is not None and r.reason == "selected":
+                hit = (round(x), round(y))
+                break
+    assert hit is not None and hit[0] >= 1280
+    r = pipe.click_display(hit[0], hit[1], "left")
+    assert r.reason == "ignited" and r.event.cam == 1
+    after = _step(pipe, 1).image
+    x, y = hit
+
+    def white(img):
+        win = img[y - 6 : y + 7, x - 6 : x + 7].astype(int)
+        return int((win.min(axis=2) >= 250).sum())
+
+    assert white(after) >= 8 and white(before) < 3  # the cross marker is drawn at the click, in camera 1's pane
+    cyan = (after[200:, 1280:, 0] < 40) & (after[200:, 1280:, 1] > 215) & (after[200:, 1280:, 2] > 215)
+    assert cyan.sum() > 20  # selected object highlighted in pane 1 too
+    pipe.ctl.selected = None
 
 
 def test_latency_csv_columns_and_values(rig):
@@ -351,10 +388,38 @@ def test_camera_drop_single_view_and_recovery(rig):
     assert any("dropped" in ln for ln in pipe._hud_extra({1}))
     assert pipe.click_display(100, 100) is not None  # single view still clickable
     assert pipe.click_display(1280 + 100, 100) is None  # no second pane any more
+    pipe.key("v")
+    pipe.key("v")  # user-selected single view = camera 1, which is dropped: falls back to camera 0, not "NO CAMERA"
+    assert pipe.ctl.visible_cams() == [1]
+    lf = _step(pipe)
+    assert pipe.pane_cams == [0] and lf.cams == [0] and lf.image[300:, :1280].max() > 0
+    pipe.key("v")  # back to dual
     srcs[1].override = None
     lf = _step(pipe)
     assert pipe.pane_cams == [0, 1] and not pipe.life.degraded and lf.image.shape[1] == 2 * 1280
     assert [e[2] for e in pipe.health.events] == ["dropped", "restored"]
+
+
+def test_change_in_hidden_camera_pauses(rig):
+    pipe, srcs, _, d, _ = rig
+    pipe.key("v")  # single view: camera 0 only
+    assert pipe.ctl.visible_cams() == [0] and pipe.life.state is State.SIMULATING
+    old = srcs[1].inner
+    changed = _file(_clip(d / "cam1_changed.mp4", 1, _moved), 1)
+    srcs[1].inner = changed  # camera 1 (not displayed) sees a moved object
+    for _ in range(80):
+        _step(pipe)
+        if pipe.life.state is State.PAUSED:
+            break
+    assert pipe.pane_cams == [0] and pipe.life.state is State.PAUSED and pipe.scene_changed
+    assert pipe.monitor.last.fraction[1] > 0.03 and pipe.monitor.last.fraction[0] < 0.01
+    srcs[1].inner = old
+    changed.stop()
+    pipe.key("space")  # continue on the old snapshot, reference re-baselined
+    _step(pipe, 12)
+    pipe.key("v")
+    pipe.key("v")  # cycle back to dual
+    assert pipe.life.state is State.SIMULATING and not pipe.scene_changed and pipe.ctl.visible_cams() == [0, 1]
 
 
 def test_scene_change_pauses_then_reacquire(rig):
@@ -388,7 +453,11 @@ def test_scene_change_pauses_then_reacquire(rig):
     assert pipe.life.state is State.ACQUIRING and pipe.ctl.reacquire_requested
     msgs = []
     pipe.progress = msgs.append
-    _step(pipe)  # performs the blocking re-acquisition, then composites on the new snapshot
+    lf = pipe.step(30.0)  # performs the blocking re-acquisition; a 30 s wall dt must not make the sim catch up
+    pipe.present(lf)
+    assert lf.reacquired
+    assert pipe.ctl.sim.stats()["sim_lag_s"] <= pipe.cfg.max_wall_dt_s + 1e-9
+    assert pipe.ctl.sim.step_count <= pipe.ctl.sim.max_substeps
     assert pipe.life.state is State.SIMULATING and not pipe.scene_changed
     assert pipe.ctl.snap is not snap_before and pipe.snapshot_version == 2 and fac.calls == 2
     assert any("depth" in m for m in msgs) and any("capturing" in m for m in msgs)
@@ -399,3 +468,48 @@ def test_scene_change_pauses_then_reacquire(rig):
     pipe.close()
     ev = (d / "run" / "events.jsonl").read_text().strip().splitlines()
     assert len(ev) >= 1 and (d / "run" / "summary.json").is_file()
+
+
+class _NoFrameSource:
+    """# MOCK: a camera that never delivers a frame until ``inner`` is set (status ``failed``/``connected``)."""
+
+    def __init__(self, cam_id):
+        self.cam_id, self.inner = cam_id, None
+
+    def latest(self):
+        return None if self.inner is None else self.inner.latest()
+
+    @property
+    def status(self):
+        return "failed" if self.inner is None else self.inner.status
+
+
+def test_startup_with_one_camera_never_delivering_then_reacquire_with_both(rig):
+    base, _, _, _d, paths = rig
+    cam1 = _NoFrameSource(1)
+    cam0 = _file(paths[0], 0)
+    acq = load_acquisition_config()
+    acq.update(seconds=0.3, max_frames=3, min_frames=3)
+    pipe = LivePipeline({0: cam0, 1: cam1}, base.calibration, make_depth_factory("oracle"),
+                        live_cfg=replace(LiveConfig.from_yaml(), change=FAST), acq_cfg=acq, grid_cfg=GRID,
+                        max_w=2560, max_h=720, first_frame_timeout_s=0.3)
+    late = None
+    try:
+        pipe.startup()
+        assert pipe.life.state is State.SIMULATING and set(pipe.ctl.snap.cameras) == {0}  # single view fallback (P1R1)
+        lf = _step(pipe, 3)
+        assert pipe.pane_cams == [0] and lf.cams == [0] and pipe.life.degraded
+        assert any("DEGRADED" in ln and "[1]" in ln for ln in pipe._hud_extra(set(), [1]))
+        assert pipe.click_display(100, 100) is not None
+        late = _file(paths[1], 1)
+        cam1.inner = late  # the camera shows up
+        _step(pipe, 2)
+        assert "press r to re-acquire" in pipe.ctl.message and pipe.pane_cams == [0]
+        pipe.key("r")
+        lf = pipe.step(0.01)
+        assert lf.reacquired and set(pipe.ctl.snap.cameras) == {0, 1} and pipe.life.state is State.SIMULATING
+        assert pipe.pane_cams == [0, 1] and not pipe.life.degraded
+    finally:
+        cam0.stop()
+        if late is not None:
+            late.stop()

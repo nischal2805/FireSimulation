@@ -27,7 +27,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,7 @@ from livefire.calib.board import BoardSpec, CalibrationError, board_corners_worl
 from livefire.calib.store import CalibrationSet
 from livefire.capture.types import Frame
 from livefire.common.config import load_params, load_yaml
+from livefire.common.errors import ReconstructionError
 from livefire.common.geometry import CameraCalibration, invert_transform
 from livefire.common.log import get_logger
 from livefire.fusion.objects import load_acquisition_config
@@ -73,12 +74,13 @@ class LiveConfig:
     drop_seconds: float = 3.0
     change: ChangeConfig = field(default_factory=ChangeConfig)
     window_frames: int = 120
+    max_wall_dt_s: float = 0.25  # one frame never advances the simulation by more than this much wall time
 
     @classmethod
     def from_yaml(cls, cfg: dict[str, Any] | None = None) -> LiveConfig:
         c = cfg if cfg is not None else load_yaml("live")
         return cls(float(_val(c["verify_px"])), float(_val(c["drop_seconds"])), ChangeConfig.from_yaml(c["change"]),
-                   int(c["latency"]["window_frames"]))  # fmt: skip
+                   int(c["latency"]["window_frames"]), float(_val(c["max_wall_dt_s"])))  # fmt: skip
 
 
 # ---- calibration verification ----------------------------------------------------------------------------------
@@ -257,6 +259,7 @@ class LiveFrame:
     t_use_ns: dict[int, int]
     composite_ms: dict[int, float]
     state: str
+    reacquired: bool = False  # this step performed a blocking re-acquisition (the window resets its wall clock)
 
 
 class LivePipeline:
@@ -271,6 +274,7 @@ class LivePipeline:
                  grid_cfg: dict[str, Any] | None = None, app_cfg: dict[str, Any] | None = None,
                  out_dir: Path | None = None, max_w: int = 1600, max_h: int = 900,
                  clock: Callable[[], float] = time.perf_counter, progress: Callable[[str], None] | None = None,
+                 first_frame_timeout_s: float = 10.0,
                  scene_label: str = "LIVE CAMERAS (simulation on frozen snapshot)") -> None:
         self.sources = dict(sources)
         self.calibration = calibration
@@ -287,6 +291,7 @@ class LivePipeline:
         self.sim_params = load_params("sim")
         self.out_dir = Path(out_dir) if out_dir is not None else None
         self.max_w, self.max_h, self.progress, self.scene_label = max_w, max_h, progress, scene_label
+        self.first_frame_timeout_s = first_frame_timeout_s
         self.life = Lifecycle()
         self.health = CameraHealth(self.cfg.drop_seconds, clock)
         self.monitor = ChangeMonitor(self.cfg.change)
@@ -311,6 +316,8 @@ class LivePipeline:
         self._frame_no = 0
         self._pane_cams: list[int] = []
         self._layout: ViewLayout | None = None
+        self._back_notified = False
+        self._reacquired = False
 
     # ---- frames -------------------------------------------------------------------------------------------
     def frame_for(self, cam: int) -> Frame | None:
@@ -336,7 +343,7 @@ class LivePipeline:
         try:
             self.life.transition(State.CALIBRATING)
             self._say("waiting for the first camera frames")
-            self._wait_first_frames()
+            self._wait_first_frames(self.first_frame_timeout_s)
             self._say("calibration: verifying against the board (if visible)")
             raw = {c: self.sources[c].latest() for c in self.cals}
             self.verify = verify_calibration(self.calibration, raw, self.cfg.verify_px)
@@ -363,9 +370,16 @@ class LivePipeline:
     def _acquire_and_build(self) -> None:
         """Lifecycle is ACQUIRING: acquire, release perception (P1R6), READY, build the simulation and go SIMULATING."""
         self.snapshot_version += 1
-        backends = self.depth_factory(self.cals)
+        active = {c: r for c, r in self.calibration.cameras.items() if self.sources[c].latest() is not None}
+        if not active:
+            raise ReconstructionError("no calibrated camera delivers frames")
+        if len(active) < len(self.cals):
+            absent = sorted(set(self.cals) - set(active))
+            log.warning("camera(s) %s deliver no frames: acquiring with camera(s) %s only (single view)", absent, sorted(active))
+        calib = self.calibration if len(active) == len(self.cals) else replace(self.calibration, cameras=active)
+        backends = self.depth_factory({c: r.calibration for c, r in active.items()})
         try:
-            res = acquire_with_report(self.sources, self.calibration, backends, self.acq_cfg, self.grid_cfg,
+            res = acquire_with_report(self.sources, calib, backends, self.acq_cfg, self.grid_cfg,
                                       version=self.snapshot_version, progress=self.progress)
         finally:
             del backends
@@ -381,7 +395,8 @@ class LivePipeline:
         self.ctl.start()
         self._sim_wall = 0.0
         self.scene_changed = False
-        self.monitor.set_reference({c: f.rgb for c in self.cals if (f := self.frame_for(c)) is not None})
+        self._back_notified = False
+        self.monitor.set_reference({c: f.rgb for c in res.snapshot.cameras if (f := self.frame_for(c)) is not None})
         n_rev = sum(1 for o in res.snapshot.objects if o.obj_id and o.material.requires_review)
         self.ctl.message = (f"ready: {len(res.snapshot.pos)} elements, {n_rev} objects default to "
                             f"'{self.acq_cfg['default_object_material']}' (right click + 1-8 to re-tag)")
@@ -430,20 +445,30 @@ class LivePipeline:
         monitor and camera health, and return the display image (RGB, HUD included). Handles a pending re-acquire
         request first (blocking; progress goes to ``progress``)."""
         assert self.ctl is not None and self.comp is not None, "call startup() first"
+        self._reacquired = False
         if self.ctl.reacquire_requested:
             self.reacquire()
+            self._reacquired = True
             if self.life.state is State.ERROR:
                 raise RuntimeError(self.error or "re-acquisition failed")
         ctl, comp = self.ctl, self.comp
-        dropped = self.health.update({c: str(getattr(self.sources[c], "status", "connected")) for c in self.cals})
+        snap = ctl.snap
+        in_snap = sorted(snap.cameras)
+        wall_dt = min(wall_dt, self.cfg.max_wall_dt_s)  # never try to catch up on a long stall / blocking acquisition
+        dropped = self.health.update({c: str(getattr(self.sources[c], "status", "connected")) for c in in_snap})
+        missing = [c for c in self.cals if c not in snap.cameras]  # calibrated but absent from the snapshot
         if self.life.state in (State.SIMULATING, State.PAUSED):
-            self.life.set_degraded(bool(dropped))
+            self.life.set_degraded(bool(dropped) or bool(missing))
+        if missing and not self._back_notified and any(self.sources[c].latest() is not None for c in missing):
+            self._back_notified = True
+            ctl.message = f"camera(s) {missing} now deliver frames: press r to re-acquire with them"
         res = ctl.tick(wall_dt)
         if res is not None:
             self._rt = res.rt_factor
             self._sim_wall += wall_dt
         cams = [c for c in ctl.visible_cams() if c not in dropped]
-        snap = ctl.snap
+        if not cams:  # the selected single view is a dropped camera: fall back to the remaining camera(s)
+            cams = [c for c in in_snap if c not in dropped]
         c0 = snap.cameras[min(snap.cameras)]
         self._pane_cams = cams
         lay = ViewLayout(c0.width, c0.height, max(1, len(cams)), self.max_w, self.max_h)
@@ -452,7 +477,7 @@ class LivePipeline:
         info: dict[str, dict[int, Any]] = {"arr": {}, "seq": {}, "use": {}, "ms": {}}
         monitor_in: dict[int, tuple[int, NDArray[np.uint8]]] = {}
         foot: dict[int, NDArray[np.bool_]] = {}
-        for i, c in enumerate(cams):
+        for c in cams:
             f = self.frame_for(c)
             if f is None:
                 panes.append(self._blank(lay, f"camera {c}: no frame yet"))
@@ -463,17 +488,21 @@ class LivePipeline:
             info["arr"][c], info["seq"][c], info["use"][c], info["ms"][c] = f.t_arrive_ns, f.seq, t_use, ms
             monitor_in[c] = (f.seq, f.rgb)
             foot[c] = footprint_mask(f.rgb, img, self.cfg.change)
-            pane = cv2.resize(img, (lay.pane_w, lay.pane_h), interpolation=cv2.INTER_AREA)
-            self._annotate(pane, c, i, lay)
-            panes.append(pane)
+            panes.append(cv2.resize(img, (lay.pane_w, lay.pane_h), interpolation=cv2.INTER_AREA))
         if not panes:
             panes.append(self._blank(lay, "NO CAMERA: all cameras failed, waiting for reconnect"))
+        for c in in_snap:  # the monitor watches every working camera, shown or not (no footprint where nothing was composited)
+            if c not in monitor_in and c not in dropped and (f := self.frame_for(c)) is not None:
+                monitor_in[c] = (f.seq, f.rgb)
         self._monitor(monitor_in, foot)
         shown = np.concatenate(panes, axis=1)
+        for i, c in enumerate(cams):  # annotate the display image with pane-aware coordinates
+            self._annotate(shown, c, i, lay)
         hud = HudInfo(self.life.label, self.recorder.fps(), self.recorder.stats()["frame_p95_ms"], self._rt,
                       ctl.sim.t_sim, self.ladder[0], {c: float(np.mean(m)) for c, m in snap.view_hole_mask.items()},
-                      len(snap.pos), False, tuple(self._hud_extra(dropped)), self.scene_label)  # fmt: skip
-        return LiveFrame(draw_hud(shown, hud), cams, info["arr"], info["seq"], info["use"], info["ms"], self.life.label)
+                      len(snap.pos), False, tuple(self._hud_extra(dropped, missing)), self.scene_label)  # fmt: skip
+        return LiveFrame(draw_hud(shown, hud), cams, info["arr"], info["seq"], info["use"], info["ms"], self.life.label,
+                         reacquired=self._reacquired)
 
     @staticmethod
     def _blank(lay: ViewLayout, text: str) -> NDArray[np.uint8]:
@@ -525,7 +554,7 @@ class LivePipeline:
             ctl.message = "scene changed: press r to re-acquire"
             log.warning("scene change detected (fractions %s)", {c: round(v, 3) for c, v in st.fraction.items()})
 
-    def _hud_extra(self, dropped: set[int]) -> list[str]:
+    def _hud_extra(self, dropped: set[int], missing: list[int] | None = None) -> list[str]:
         ctl = self.ctl
         assert ctl is not None
         s = self.recorder.stats()
@@ -538,6 +567,8 @@ class LivePipeline:
         if dropped:
             cam += f"   DEGRADED: camera(s) {sorted(dropped)} dropped (single-view), re-added on reconnect"
         lines.append(cam + (f"   [{cal}]" if cal else ""))
+        if missing:
+            lines.append(f"DEGRADED: camera(s) {missing} delivered no frames at start-up (single view); r re-acquires with them once they work")
         if self.scene_changed:
             lines.append("SCENE CHANGED: press r to re-acquire (space continues on the old snapshot)")
         return lines
@@ -638,7 +669,7 @@ def run_live(cameras_path: str | None, calib: str, calib_root: Path, depth: str 
         while not pipe.ctl.quit and (frames is None or n < frames):  # type: ignore[union-attr]
             now = time.perf_counter()
             lf = pipe.step(now - last)
-            last = now
+            last = time.perf_counter() if lf.reacquired else now  # a blocking re-acquire is not simulated time
             if state["click"] is not None:  # mapped with the layout of the frame just composed
                 x, y, button, mods = state["click"]
                 state["click"] = None

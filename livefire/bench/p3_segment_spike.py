@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import hashlib
 import json
 import time
 import urllib.request
@@ -46,6 +47,8 @@ from livefire.perception.segment import create_segmentation_backend, load_segmen
 from livefire.scene.synthetic import build_table_v1, load_cameras, render_view
 
 ROOT = Path(__file__).resolve().parents[1]
+# images.cocodataset.org fails TLS verification (hostname mismatch, checked 2026-11-15), so plain http is used and
+# integrity is pinned by the sha256 values recorded in the manifest (never disable certificate checks).
 COCO_ANN_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
 COCO_IMG_URL = "http://images.cocodataset.org/val2017/{file_name}"
 
@@ -54,8 +57,9 @@ def _log(m: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
 
 
-def instance_masks(ids: np.ndarray, ignore=(-1, 0)) -> dict[int, np.ndarray]:
-    """Boolean mask per instance id of an id image (ids in ``ignore`` are background)."""
+def instance_masks(ids: np.ndarray, ignore=(-1,)) -> dict[int, np.ndarray]:
+    """Boolean mask per instance id of an id image (ids in ``ignore`` are background). Default: only -1 (backend
+    output numbers instances from 0); hand-labelled PNGs use 0 as background and pass ``ignore=(0,)``."""
     return {int(i): ids == i for i in np.unique(ids) if int(i) not in ignore}
 
 
@@ -127,6 +131,14 @@ def clip_items(clips: Path, calib_root: Path):
     return items
 
 
+def _sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def fetch_coco(out_dir: Path, n_images: int) -> None:
     """Download COCO val2017 annotations (CC BY 4.0, ~250 MB zip, cached) and ``n_images`` images that contain at least
     two non-crowd instances of 4+ categories with area >= 2 % of the image; write ``instances.json`` (subset) and
@@ -157,6 +169,7 @@ def fetch_coco(out_dir: Path, n_images: int) -> None:
             break
     (out_dir / "images").mkdir(exist_ok=True)
     manifest = {"annotations": "COCO 2017 val instances, CC BY 4.0, https://cocodataset.org/#termsofuse",
+                "annotations_zip": {"url": COCO_ANN_URL, "sha256": _sha256(zp), "bytes": zp.stat().st_size},
                 "images": []}
     sub = {"images": [], "annotations": [], "categories": ann["categories"]}
     for iid in chosen:
@@ -167,7 +180,8 @@ def fetch_coco(out_dir: Path, n_images: int) -> None:
         sub["images"].append(im)
         sub["annotations"] += [a for a in by_img[iid] if a["area"] >= 0.02 * im["width"] * im["height"]]
         manifest["images"].append({"file": im["file_name"], "flickr_url": im.get("flickr_url"),
-                                   "license": lic[im["license"]]["name"], "license_url": lic[im["license"]]["url"]})
+                                   "license": lic[im["license"]]["name"], "license_url": lic[im["license"]]["url"], "sha256": _sha256(p),
+                                   "url": COCO_IMG_URL.format(file_name=im["file_name"])})
     (out_dir / "instances.json").write_text(json.dumps(sub))
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
     _log(f"COCO subset: {len(chosen)} images in {out_dir}")
@@ -212,10 +226,10 @@ def evaluate(backend, items, label: str, repeats: int):
         for _ in range(repeats):
             res = backend.segment(fr)
             lats.append(backend.latency_ms)
-        pred = instance_masks(res.instance_ids)
+        pred = instance_masks(res.instance_ids, ignore=(-1,))  # ids start at 0: never drop id 0
         m = match_metrics(gt, pred, gt_cat, res.categories)
         row = {"dataset": label, "frame": name, "latency_median_ms": float(np.median(lats)),
-               "latency_p95_ms": float(np.percentile(lats, 95)), "peak_vram_alloc_mb": backend.peak_vram_allocated_mb,
+               "latency_p95_ms": float(np.percentile(lats, 95)), "latencies_ms": ";".join(f"{x:.1f}" for x in lats), "peak_vram_alloc_mb": backend.peak_vram_allocated_mb,
                "peak_vram_reserved_mb": backend.peak_vram_reserved_mb, **m,
                "pred_categories": ";".join(sorted(res.categories.values()))}
         rows.append(row)
@@ -230,14 +244,13 @@ def _mean(rows, key):
 
 
 def csv_row(rec, rows, name, label, resolution, extra, repeats, device):
-    lat = np.array([r["latency_median_ms"] for r in rows])
-    p95 = np.array([r["latency_p95_ms"] for r in rows])
-    notes = [f"backend={name}", f"dataset={label}", f"images={len(rows)}", f"miou={_mean(rows, 'miou'):.3f}",
+    lat = np.array([float(x) for r in rows for x in r["latencies_ms"].split(";")])  # all timed calls pooled
+    notes = [f"latency percentiles pooled over {len(lat)} timed calls of {len(rows)} images", f"backend={name}", f"dataset={label}", f"images={len(rows)}", f"miou={_mean(rows, 'miou'):.3f}",
              f"recall50={_mean(rows, 'recall50'):.3f}", f"cat_acc={_mean(rows, 'cat_acc'):.3f}",
              f"n_pred_mean={_mean(rows, 'n_pred'):.1f}", f"n_gt_mean={_mean(rows, 'n_gt'):.1f}", extra]
     rec.add_row(scene=label, resolution=resolution, mode="spike", stage="segment_infer", variant=name,
-                warmup_frames=2, samples=len(rows) * repeats, median_ms=round(float(np.median(lat)), 3),
-                p95_ms=round(float(np.max(p95)), 3), p99_ms=round(float(np.max(p95)), 3), views=1,
+                warmup_frames=1, samples=len(lat), median_ms=round(float(np.median(lat)), 3),
+                p95_ms=round(float(np.percentile(lat, 95)), 3), p99_ms=round(float(np.percentile(lat, 99)), 3), views=1,
                 peak_vram_alloc_mb=rows[0]["peak_vram_alloc_mb"] if device != "cpu" else "",
                 peak_vram_reserved_mb=rows[0]["peak_vram_reserved_mb"] if device != "cpu" else "",
                 notes="; ".join(notes))
@@ -253,6 +266,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--coco-images", type=int, default=6)
     ap.add_argument("--fetch-coco", action="store_true", help="download the COCO val2017 subset first")
     ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument("--wall-note", default="", help="free text copied into the manifest (e.g. machine load)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
     device = args.device or str(load_yaml("app")["device"])
@@ -262,7 +276,9 @@ def main(argv: list[str] | None = None) -> None:
     fw = f"torch-{torch.__version__.split('+')[0]}" + ("-cpu" if device == "cpu" else "")
     rec = BenchmarkRecorder(device, framework=fw, workload_version="segment-spike-v1")
     cores = f"CPU only, torch threads={torch.get_num_threads()}" if device == "cpu" else "GPU"
-    manifest: dict = {"device": device, "candidates": {}, "coco": None}
+    manifest: dict = {"device": device, "candidates": {}, "coco": None, "wall_note": args.wall_note,
+                      "started": datetime.datetime.now().isoformat(timespec="seconds")}
+    t_start = time.perf_counter()
     if args.fetch_coco:
         fetch_coco(Path(args.coco_dir), args.coco_images)
     syn = synthetic_items()
@@ -313,6 +329,7 @@ def main(argv: list[str] | None = None) -> None:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(all_rows)
+    manifest["wall_time_s"] = round(time.perf_counter() - t_start, 1)
     out.with_name(out.stem + "_manifest.json").write_text(json.dumps(manifest, indent=2))
     _log(f"wrote {out}")
 

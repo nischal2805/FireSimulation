@@ -16,6 +16,7 @@ from livefire.perception.types import SegmentationResult
 
 __all__ = [
     "MetricsMixin",
+    "dedup_masks",
     "default_device",
     "load_segment_config",
     "model_cache_dir",
@@ -27,10 +28,11 @@ __all__ = [
 
 
 def segment_extra_available() -> bool:
-    """True when torch, transformers and pillow can be imported (the ``perception`` extra)."""
+    """True when torch, torchvision, transformers and pillow can be imported (the ``perception`` extra)."""
     try:
         import PIL  # noqa: F401
         import torch  # noqa: F401
+        import torchvision  # noqa: F401
         import transformers  # noqa: F401
     except ImportError:
         return False
@@ -45,6 +47,25 @@ def load_segment_config() -> dict:
 def scalar(entry) -> float:
     """Value of a ``{value, unit, range, status}`` parameter entry (or a bare number)."""
     return float(entry["value"] if isinstance(entry, dict) else entry)
+
+
+def dedup_masks(masks: np.ndarray, scores, iou_thresh: float) -> np.ndarray:
+    """Indices of the masks kept (in descending score order) after removing near-duplicates: walking from the best score down, a mask is dropped when its IoU with an already kept mask is
+    ``>= iou_thresh``. ``masks`` bool (N, H, W) host, ``scores`` (N,). Pure; ties keep the lower input index."""
+    masks = np.asarray(masks, dtype=bool)
+    n = masks.shape[0]
+    order = np.argsort(-np.asarray(scores, dtype=np.float64).reshape(n), kind="stable")
+    kept: list[int] = []
+    for i in order:
+        dup = False
+        for j in kept:
+            union = int((masks[i] | masks[j]).sum())
+            if union and int((masks[i] & masks[j]).sum()) / union >= iou_thresh:
+                dup = True
+                break
+        if not dup:
+            kept.append(int(i))
+    return np.asarray(kept, dtype=np.int64)
 
 
 def result_from_masks(

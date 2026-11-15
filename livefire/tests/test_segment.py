@@ -1,10 +1,12 @@
 """P3-001: segmentation backends. Oracle and helpers run without weights; real backends skip unless the extra and
 cached weights exist (never downloads)."""
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -19,7 +21,7 @@ from livefire.perception.segment import (
     segment_extra_available,
     validate_segmentation_result,
 )
-from livefire.perception.segment.base import model_cache_dir
+from livefire.perception.segment.base import dedup_masks, model_cache_dir
 from livefire.scene.synthetic import build_table_v1, load_cameras, render_view
 
 CAMS = load_cameras()
@@ -57,6 +59,9 @@ def test_oracle_matches_ground_truth(cam_id):
         # camera 0, measured); the brief's 0.95 holds for the exact erode_px=0 mask (tested below).
         assert iou >= (0.92 if gt.sum() >= 3000 else 0.3), (cam_id, names[oid], int(gt.sum()), iou)
         assert res.categories[inst] == cmap[names[oid]] and res.scores[inst] == 1.0
+        # erosion only: pred inside GT, and everything lost lies on the 1-px GT boundary ring
+        ring = gt & ~cv2.erode(gt.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        assert not (pred & ~gt).any() and not ((gt & ~pred) & ~ring).any()
 
 
 def test_oracle_ids_permuted_per_camera_and_consistent():
@@ -164,8 +169,90 @@ def test_real_backend_output_contract(name, ids):
         pytest.skip("perception extra not installed")
     if not all(_cached(i) for i in ids):
         pytest.skip(f"weights for {name} not cached under data/models (run `make segment-spike`)")
-    be = create_segmentation_backend(name, device="cpu")
+    cfg = {**load_segment_config(), "local_files_only": True}  # never touch the network in a test
+    be = create_segmentation_backend(name, cfg, device="cpu")
     rgb = render_view(SCENE, CAMS[0]).rgb[::2, ::2].copy()  # one small image
     res = be.segment(Frame(0, rgb, 0, 0, 5))
     validate_segmentation_result(res, rgb.shape[:2], 5)
     be.release()
+
+
+def _spike():
+    spec = importlib.util.spec_from_file_location("p3_segment_spike",
+                                                  Path(__file__).parents[1] / "bench" / "p3_segment_spike.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_spike_metrics_keep_prediction_id_zero():
+    sp = _spike()
+    ids = np.full((6, 6), -1, np.int32)
+    ids[:3, :3] = 0  # backends number instances from 0
+    ids[3:, 3:] = 1
+    assert set(sp.instance_masks(ids)) == {0, 1}  # id 0 is an instance, only -1 is background
+    assert set(sp.instance_masks(ids + 1, ignore=(0,))) == {1, 2}  # label PNGs: 0 is background
+    gt = {7: ids == 0, 8: ids == 1}
+    m = sp.match_metrics(gt, sp.instance_masks(ids), {7: "a", 8: "b"}, {0: "a", 1: "x"})
+    assert m["miou"] == 1.0 and m["recall50"] == 1.0 and m["n_pred"] == 2 and m["cat_acc"] == 0.5
+    only0 = np.where(ids == 0, 0, -1).astype(np.int32)
+    m0 = sp.match_metrics(gt, sp.instance_masks(only0), {7: "a", 8: "b"}, {0: "a"})
+    assert m0["recall50"] == 0.5 and m0["n_pred"] == 1
+
+
+def test_dedup_masks_drops_near_duplicates_keeps_best():
+    a = np.zeros((10, 10), bool)
+    a[:5, :5] = True
+    dup = a.copy()
+    dup[0, 0] = False  # IoU 24/25
+    other = np.zeros((10, 10), bool)
+    other[6:, 6:] = True
+    keep = dedup_masks(np.stack([dup, a, other]), [0.7, 0.9, 0.5], 0.85)
+    assert list(keep) == [1, 2]  # best of the pair (index 1) and the distinct mask
+    assert list(dedup_masks(np.stack([dup, a]), [0.7, 0.9], 1.0)) == [1, 0]  # threshold 1.0 keeps near-duplicates
+
+
+needs_extra = pytest.mark.skipif(not segment_extra_available(), reason="perception extra not installed")
+
+
+@needs_extra
+def test_canonical_category_and_released_state():
+    from livefire.perception.segment.hf_backends import _HFBase
+
+    class Stub(_HFBase):  # no model: exercises the shared plumbing only
+        name = "stub"
+
+        def _segment_np(self, rgb, calib_version, warm_box=None):
+            return result_from_masks(np.zeros((0, *rgb.shape[:2]), bool), [], [], calib_version)
+
+    be = Stub(None, "cpu")
+    assert be._canon_category("paper sheet") == "paper sheet"
+    assert be._canon_category("a paper sheet on table") == "paper sheet"  # longest contained phrase
+    assert be._canon_category("paper") == "paper sheet"  # truncated label
+    assert be._canon_category("wooden") == "wooden block"
+    assert be._canon_category("mug") == "ceramic mug"
+    assert be._canon_category("dragon") == "dragon"
+    fr = Frame(0, np.zeros((8, 8, 3), np.uint8), 0, 0, 3)
+    be.warmup((8, 8))
+    assert be.segment(fr).calib_version == 3
+    be.release()
+    for call in (lambda: be.segment(fr), lambda: be.warmup((8, 8))):
+        with pytest.raises(SegmentationError, match="backend released"):
+            call()
+
+
+def test_missing_torchvision_gives_segmentation_error_naming_the_extra():
+    code = (
+        "import sys; sys.modules['torchvision'] = None\n"
+        "from livefire.perception.segment import create_segmentation_backend, segment_extra_available\n"
+        "from livefire.common.errors import SegmentationError\n"
+        "assert segment_extra_available() is False\n"
+        "for n in ('gdino_sam2', 'sam3', 'mask2former'):\n"
+        "    try:\n        create_segmentation_backend(n)\n"
+        "    except SegmentationError as e:\n        assert 'perception' in str(e), e\n"
+        "    else:\n        raise SystemExit('no error ' + n)\n"
+        "print('ok')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True,
+                       cwd=Path(__file__).parents[1])
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr

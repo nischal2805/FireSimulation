@@ -33,7 +33,7 @@ from livefire.fusion.objects import (
 )
 from livefire.fusion.tsdf import TSDFVolume
 from livefire.perception.material.types import MATERIAL_CLASSES, MaterialPrediction
-from livefire.perception.segment.base import load_segment_config
+from livefire.perception.segment.base import load_segment_config, validate_segmentation_result
 from livefire.scene.builder import ViewInput, manual_material, snapshot_from_surfels
 from livefire.scene.snapshot import SceneSnapshot
 from livefire.scene.surfels import ViewPoints, bin_surfels
@@ -253,7 +253,9 @@ def acquire_with_report(
                 say(f"segmenting camera {c}, keyframe {k + 1}/{n_kf}")
                 try:
                     with stage("segment"):
-                        seg_views[c + _VIEW_STRIDE * k] = (c, fl[i], seg_backends[c].segment(fl[i]))
+                        res = seg_backends[c].segment(fl[i])
+                        validate_segmentation_result(res, (cals[c].height, cals[c].width), fl[i].calib_version)
+                    seg_views[c + _VIEW_STRIDE * k] = (c, fl[i], res)
                 except SegmentationError as e:
                     warnings.append(f"segmentation failed on camera {c}: {e}")
                     log.warning("segmentation failed on camera %d (%s); falling back to geometric labels", c, e)

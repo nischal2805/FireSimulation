@@ -168,3 +168,47 @@ def test_instance_colors_lab_means():
     c = instance_colors(rgb, ids)
     assert set(c) == {0, 1} and c[0][1] > 50 and c[1][1] < -50  # red: a* > 0, green: a* < 0
     assert instance_colors(rgb, np.full((4, 4), -1, np.int32)) == {}
+
+
+def test_covisible_iou_differs_from_the_literal_iou():
+    """A (cam 0) has 100 surfels, only 12 of them labelled as B in cam 1 (the other 88 are background there: the surface
+    is seen edge-on). The literal surfel-set IoU is 12/100 = 0.12 < min_iou; the co-visible IoU is 12/17, so A and B link.
+    A sliver of 5 + 7 surfels shared with two *different* objects does not link (too few shared surfels)."""
+    n = 300
+    cam0 = _labels(n, {0: slice(0, 100), 1: slice(100, 200)})
+    cam1 = _labels(n, {0: slice(0, 12), 1: slice(95, 107)})  # b0 sits wholly inside a0; b1 straddles a0 (5) and a1 (7)
+    literal = 12 / 100
+    assert literal < float(CFG["assoc"]["min_iou"]["value"])
+    r = associate_objects({0: cam0, 1: cam1}, np.zeros(n, np.int32), {}, CFG)
+    assert r.observations[int(r.labels[0])] == {0: 0, 1: 0}  # linked although the literal IoU would reject it
+    assert r.report["links"][0]["iou"] == pytest.approx(12 / 17)  # co-visible domain: 12 + 5 labelled surfels of a0
+    assert len(r.report["links"]) == 1  # the 5 + 7 sliver pair did not link
+    assert r.observations[int(r.labels[150])] == {0: 1}  # a1 is not merged with b1
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_vote_tie_goes_to_the_object_with_fewer_surfels(swap):
+    """Surfels 60..99 are one instance in one camera but part of a second, separate object in the other: one vote each.
+    The tie goes to the finer (smaller) object, not to the camera that lumps both together."""
+    n = 100
+    lump = _labels(n, {0: slice(0, 100)})
+    fine = _labels(n, {0: slice(0, 60), 1: slice(60, 100)})
+    cams = {0: fine, 1: lump} if swap else {0: lump, 1: fine}
+    r = associate_objects(cams, np.zeros(n, np.int32), {}, CFG)
+    small = int(r.labels[99])
+    assert small != int(r.labels[0]) and (r.labels[60:] == small).all() and (r.labels[:60] == r.labels[0]).all()
+    small_view = 0 if swap else 1
+    assert r.observations[small] == {small_view: 1}
+
+
+def test_table_observation_prefers_the_largest_component():
+    n = 130
+    # two unlinked table-category components per camera (the first, small one has the lower component index)
+    cam0 = _labels(n, {0: slice(0, 30), 1: slice(30, 130)})
+    cam1 = _labels(n, {7: slice(0, 30), 8: slice(30, 130)})
+    cats = {0: {0: "table", 1: "table"}, 1: {7: "table", 8: "table"}}
+    # cam 1's instances are disjoint from the small cam 0 instance, so the small one links to nothing
+    cam1 = _labels(n, {7: slice(110, 130), 8: slice(0, 110)})
+    r = associate_objects({0: cam0, 1: cam1}, np.zeros(n, np.int32), {}, CFG, categories=cats)
+    assert (r.labels == 0).all()  # everything is table
+    assert r.observations[0] == {0: 1, 1: 8}, r.observations  # the big instances, not the first-seen small ones

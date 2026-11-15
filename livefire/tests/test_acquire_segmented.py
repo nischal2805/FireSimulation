@@ -9,7 +9,9 @@ import pytest
 
 from livefire.common.errors import SegmentationError
 from livefire.perception.segment import OracleSegmentationBackend
+from livefire.perception.types import SegmentationResult
 from livefire.scene.acquire import acquire_with_report, keyframe_indices
+from livefire.sim.device import select_device
 from test_acquire import CAMS, GRID, SCENE, _backends, _cfg, _sources, _truth_dist
 
 # Golden digest of the P1 (segmenters=None) two-camera acquisition of tests/test_acquire.py's fixture:
@@ -17,6 +19,8 @@ from test_acquire import CAMS, GRID, SCENE, _backends, _cfg, _sources, _truth_di
 # (P3-001), BEFORE acquire.py was edited for P3-002. Deterministic over repeated runs (checked 3x).
 GOLDEN_P1_DIGEST = "f0597134a44008aa1eee903fd6907f43550a0a5b2a4001e8a3ecd0ccb8faafcf"
 GOLDEN_P1_N = 8369
+# The digest is bit-exact only for the Linux x86 CPU Warp path it was taken on (float summation order differs on GPU).
+needs_cpu_golden = pytest.mark.skipif(select_device() != "cpu", reason="golden digest was taken on the CPU (Linux) device")
 
 
 def _digest(snap):
@@ -62,6 +66,7 @@ def seg_two_cam():
     return _run([0, 1], be), be
 
 
+@needs_cpu_golden
 def test_segmenters_none_is_bit_identical_to_p1():
     r = _run([0, 1], None)
     assert len(r.snapshot.pos) == GOLDEN_P1_N
@@ -141,6 +146,7 @@ def test_single_camera_with_segmentation():
         assert o.observations[0] == be.permutation[truth]
 
 
+@needs_cpu_golden
 def test_shared_backend_failure_falls_back_to_geometry():
     class _Broken:
         device, latency_ms, peak_vram_allocated_mb, peak_vram_reserved_mb = "cpu", 0.0, 0.0, 0.0
@@ -175,3 +181,65 @@ def test_two_keyframes_are_associated_like_extra_views():
     for o in snap.objects:
         truth = 0 if o.obj_id == 0 else found[o.obj_id][0]
         assert o.observations == {0: be[0].permutation[truth]}
+
+
+@needs_cpu_golden
+def test_wrong_shaped_segmentation_skips_the_camera():
+    """A backend returning a map of the wrong size is a skipped camera (warning), not a crash; with all cameras skipped
+    the geometric result is the P1 one."""
+
+    class _WrongShape:
+        device, latency_ms, peak_vram_allocated_mb, peak_vram_reserved_mb = "cpu", 0.0, 0.0, 0.0
+
+        def warmup(self, shape):
+            pass
+
+        def segment(self, frame):
+            return SegmentationResult(np.full((10, 10), -1, np.int32), {}, {}, frame.calib_version)
+
+    r = _run([0, 1], _WrongShape())
+    assert _digest(r.snapshot) == GOLDEN_P1_DIGEST
+    assert sum("segmentation failed" in w for w in r.report["warnings"]) == 2  # both cameras
+    # one good camera, one bad: the good one still segments
+    r = _run([0, 1], {0: OracleSegmentationBackend(CAMS[0], SCENE), 1: _WrongShape()})
+    assert r.report["segmentation"]["views"] == {0: 0} and len(r.snapshot.objects) == 5
+    assert any("camera 1" in w for w in r.report["warnings"])
+
+
+class _DropCategory:
+    """# MOCK: wraps a segmentation backend and deletes every instance of ``category`` (a missed detection)."""
+
+    def __init__(self, inner, category):
+        self.inner, self.category = inner, category
+        self.device, self.latency_ms = "cpu", 0.0
+        self.peak_vram_allocated_mb = self.peak_vram_reserved_mb = 0.0
+
+    def warmup(self, shape):
+        pass
+
+    def segment(self, frame):
+        r = self.inner.segment(frame)
+        gone = {i for i, c in r.categories.items() if c == self.category}
+        ids = np.where(np.isin(r.instance_ids, list(gone)), -1, r.instance_ids).astype(np.int32)
+        keep = {i for i in r.categories if i not in gone}
+        return SegmentationResult(ids, {i: r.categories[i] for i in keep}, {i: r.scores[i] for i in keep}, r.calib_version)
+
+
+def test_impaired_oracle_missed_cloth_in_one_camera_and_coarse_masks():
+    """Camera 1 misses the cloth entirely and both cameras have 3 px eroded masks: the cloth is still its own object
+    from camera 0's instance alone (observations only camera 0), and the other objects still link across cameras."""
+    be = {0: OracleSegmentationBackend(CAMS[0], SCENE, erode_px=3), 1: OracleSegmentationBackend(CAMS[1], SCENE, erode_px=3)}
+    r = _run([0, 1], {0: be[0], 1: _DropCategory(be[1], "cloth")})
+    snap = r.snapshot
+    found, _ = _membership(snap)
+    assert sorted(t for t, _ in found.values()) == [1, 2, 3, 4], found
+    assert all(rate > 0.9 for _t, rate in found.values()), found
+    cloth = next(o for o, (t, _) in found.items() if t == 4)
+    assert snap.objects[cloth].observations == {0: be[0].permutation[4]}
+    for o, (t, _) in found.items():
+        want = {0: be[0].permutation[t], 1: be[1].permutation[t]}
+        if t == 2:  # the 249 px edge-on metal box vanishes under 3 px erosion in camera 0 (the oracle drops empty masks)
+            assert snap.objects[o].observations == {1: want[1]}, (o, t)
+        elif t != 4:
+            assert snap.objects[o].observations == want, (o, t)
+    assert snap.objects[0].observations == {0: be[0].permutation[0], 1: be[1].permutation[0]}

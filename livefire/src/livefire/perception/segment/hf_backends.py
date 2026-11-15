@@ -18,6 +18,7 @@ import numpy as np
 from livefire.common.errors import SegmentationError
 from livefire.perception.segment.base import (
     MetricsMixin,
+    dedup_masks,
     default_device,
     load_segment_config,
     model_cache_dir,
@@ -52,6 +53,9 @@ class _HFBase(MetricsMixin):
         self.min_area_px = int(self.cfg["min_mask_area_px"])
         self.max_instances = int(self.cfg["max_instances"])
         self.vocabulary = [str(v) for v in self.cfg["vocabulary"]]
+        self.mask_dedup_iou = scalar(self.cfg["mask_dedup_iou"])
+        self.local_files_only = bool(self.cfg.get("local_files_only", False))
+        self._released = False
         self._models: list = []
 
     def _to_device(self, model):
@@ -59,24 +63,40 @@ class _HFBase(MetricsMixin):
         return model.half() if self._half else model
 
     def warmup(self, shape: tuple[int, int]) -> None:
-        """One segmentation of a black (H, W) image (allocator and kernel warm-up)."""
-        self._segment_np(np.zeros((shape[0], shape[1], 3), np.uint8), 0)
+        """One segmentation of a synthetic (H, W) image (allocator and kernel warm-up); serialised with ``segment``."""
+        self._check_alive()
+        h, w = int(shape[0]), int(shape[1])
+        img = np.zeros((h, w, 3), np.uint8)
+        img[:, :, 0] = np.linspace(0, 255, w, dtype=np.uint8)[None, :]
+        img[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = (200, 180, 40)  # a bright block so a detector has something
+        with self._lock:
+            self._segment_np(img, 0, warm_box=(w * 0.25, h * 0.25, w * 0.75, h * 0.75))
+
+    def _check_alive(self) -> None:
+        if self._released:
+            raise SegmentationError("backend released")
 
     def segment(self, frame) -> SegmentationResult:
         """Instance segmentation of ``frame.rgb`` (``SegmentationError`` on model failure)."""
+        self._check_alive()
         try:
             with self._lock:
+                self._check_alive()
                 return self._timed(lambda: self._segment_np(np.ascontiguousarray(frame.rgb), frame.calib_version))
         except SegmentationError:
             raise
         except Exception as e:
             raise SegmentationError(f"{self.name} inference failed: {e}") from e
 
-    def _segment_np(self, rgb: np.ndarray, calib_version: int) -> SegmentationResult:
+    def _segment_np(self, rgb: np.ndarray, calib_version: int, warm_box=None) -> SegmentationResult:
+        """Segment one image; ``warm_box`` (x0, y0, x1, y1) is only used by ``warmup`` to force a second-stage call."""
         raise NotImplementedError
 
     def release(self) -> None:
-        """Drop the model references and free the allocator cache (P3R6). The backend is unusable afterwards."""
+        """Drop the model references and free the allocator cache (P3R6). Afterwards ``segment``/``warmup`` raise
+        ``SegmentationError("backend released")``."""
+        with self._lock:
+            self._released = True
         self._models.clear()
         for k in [k for k, v in vars(self).items() if k.startswith(("_m_", "_proc"))]:
             setattr(self, k, None)
@@ -86,18 +106,28 @@ class _HFBase(MetricsMixin):
 
     def _load(self, cls, hf_id: str, *, processor=False):
         try:
-            kw = {"cache_dir": self._cache}
+            kw = {"cache_dir": self._cache, "local_files_only": self.local_files_only}
             return cls.from_pretrained(hf_id, **kw)
         except Exception as e:
             raise SegmentationError(f"could not load {'processor' if processor else 'model'} {hf_id}: {e}") from e
 
     def _canon_category(self, label: str) -> str:
-        """Vocabulary phrase matching a detector label (exact, else the longest phrase contained in it, else the label)."""
+        """Vocabulary phrase for a detector label: exact; else the longest phrase contained in the label; else, for a
+        truncated label (its tokens a contiguous token run of a phrase, e.g. "paper" or "wooden"), the shortest such
+        phrase; else the label itself (lower case)."""
         lab = label.strip().lower()
         if lab in self.vocabulary:
             return lab
         hits = [v for v in self.vocabulary if v in lab]
-        return max(hits, key=len) if hits else lab
+        if hits:
+            return max(hits, key=len)
+        toks = lab.split()
+        if toks:
+            parts = [v for v in self.vocabulary if any(v.split()[i : i + len(toks)] == toks
+                                                      for i in range(len(v.split()) - len(toks) + 1))]
+            if parts:
+                return min(parts, key=len)
+        return lab
 
 
 class GDinoSam2Backend(_HFBase):
@@ -108,7 +138,11 @@ class GDinoSam2Backend(_HFBase):
 
     def __init__(self, cfg: dict | None = None, device: str | None = None) -> None:
         super().__init__(cfg, device)
-        from transformers import AutoProcessor, GroundingDinoForObjectDetection, Sam2Model, Sam2Processor
+        try:
+            from transformers import AutoProcessor, GroundingDinoForObjectDetection, Sam2Model, Sam2Processor
+        except ImportError as e:
+            raise SegmentationError(f"transformers lacks the Grounding DINO / SAM 2 classes needed by gdino_sam2: {e}; "
+                                    "update the 'perception' extra (uv sync --extra perception)") from e
 
         b = self.cfg["backends"]["gdino_sam2"]
         self.detector_hf_id, self.sam_hf_id = b["detector_hf_id"], b["sam_hf_id"]
@@ -118,8 +152,9 @@ class GDinoSam2Backend(_HFBase):
         self._m_sam = self._to_device(self._load(Sam2Model, self.sam_hf_id))
         self._models = [self._m_det, self._m_sam]
         self._text = ". ".join(v.lower() for v in self.vocabulary) + "."
+        self.max_boxes = int(self.cfg.get("max_boxes", self.max_instances))
 
-    def _segment_np(self, rgb: np.ndarray, calib_version: int) -> SegmentationResult:
+    def _segment_np(self, rgb: np.ndarray, calib_version: int, warm_box=None) -> SegmentationResult:
         torch = self._torch
         from PIL import Image
 
@@ -136,11 +171,16 @@ class GDinoSam2Backend(_HFBase):
             )[0]
             labels = det.get("text_labels", det["labels"])
             keep = [i for i, lab in enumerate(labels) if str(lab).strip()]
-            if not keep:
+            keep = sorted(keep, key=lambda i: -float(det["scores"][i]))[: self.max_boxes]  # top-k by score
+            if keep:
+                boxes = det["boxes"][keep].float().cpu()
+                scores = det["scores"][keep].float().cpu().numpy()
+                cats = [self._canon_category(str(labels[i])) for i in keep]
+            elif warm_box is not None:  # warm-up only: force the SAM 2 stage
+                boxes = torch.tensor([list(warm_box)], dtype=torch.float32)
+                scores, cats = np.array([0.5]), ["warmup"]
+            else:
                 return result_from_masks(np.zeros((0, h, w), bool), [], [], calib_version)
-            boxes = det["boxes"][keep].float().cpu()
-            scores = det["scores"][keep].float().cpu().numpy()
-            cats = [self._canon_category(str(labels[i])) for i in keep]
             p = min(max(self.mask_threshold, 1e-4), 1 - 1e-4)
             logit = float(np.log(p / (1.0 - p)))  # probability threshold -> SAM 2 mask-logit threshold
             sin = self._proc_sam(images=img, input_boxes=[boxes.tolist()], return_tensors="pt").to(self.device)
@@ -150,6 +190,8 @@ class GDinoSam2Backend(_HFBase):
             masks = self._proc_sam.post_process_masks(sout.pred_masks.float().cpu(), sin["original_sizes"],
                                                       mask_threshold=logit, binarize=True)[0]
         m = masks.reshape(-1, h, w).numpy().astype(bool)  # (n_boxes, 1, H, W) -> (n_boxes, H, W)
+        k = dedup_masks(m, scores, self.mask_dedup_iou)  # duplicate boxes give near-identical masks
+        m, scores, cats = m[k], scores[k], [cats[i] for i in k]
         return result_from_masks(m, scores, cats, calib_version, min_area_px=self.min_area_px,
                                  max_instances=self.max_instances)
 
@@ -162,14 +204,18 @@ class Sam3Backend(_HFBase):
 
     def __init__(self, cfg: dict | None = None, device: str | None = None) -> None:
         super().__init__(cfg, device)
-        from transformers import Sam3Model, Sam3Processor
+        try:
+            from transformers import Sam3Model, Sam3Processor
+        except ImportError as e:
+            raise SegmentationError(f"transformers lacks Sam3Model/Sam3Processor: {e}; update the 'perception' extra "
+                                    "(uv sync --extra perception)") from e
 
         self.hf_id = self.cfg["backends"]["sam3"]["hf_id"]
         self._proc = self._load(Sam3Processor, self.hf_id, processor=True)
         self._m_sam3 = self._to_device(self._load(Sam3Model, self.hf_id))
         self._models = [self._m_sam3]
 
-    def _segment_np(self, rgb: np.ndarray, calib_version: int) -> SegmentationResult:
+    def _segment_np(self, rgb: np.ndarray, calib_version: int, warm_box=None) -> SegmentationResult:
         torch = self._torch
         from PIL import Image
 
@@ -191,27 +237,37 @@ class Sam3Backend(_HFBase):
                     all_s += [float(s) for s in res["scores"].float().cpu()]
                     all_c += [phrase] * n
         masks = np.concatenate(all_m) if all_m else np.zeros((0, h, w), bool)
+        if len(masks):  # the same object can answer several phrases
+            k = dedup_masks(masks, all_s, self.mask_dedup_iou)
+            masks, all_s, all_c = masks[k], [all_s[i] for i in k], [all_c[i] for i in k]
         return result_from_masks(masks, all_s, all_c, calib_version, min_area_px=self.min_area_px,
                                  max_instances=self.max_instances)
 
 
 class Mask2FormerBackend(_HFBase):
-    """Mask2Former Swin-T COCO instance segmentation (closed set, 80 things classes). Category = COCO label name
+    """Mask2Former Swin-T COCO instance segmentation (closed set, 80 things classes); instance score cut =
+    ``backends.mask2former.score_threshold``. Category = COCO label name
     (``config.id2label``); score = instance score. Table-top objects without a COCO class are not found."""
 
     name = "mask2former"
 
     def __init__(self, cfg: dict | None = None, device: str | None = None) -> None:
         super().__init__(cfg, device)
-        from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+        try:
+            from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+        except ImportError as e:
+            raise SegmentationError(f"transformers lacks Mask2Former: {e}; update the 'perception' extra "
+                                    "(uv sync --extra perception)") from e
 
-        self.hf_id = self.cfg["backends"]["mask2former"]["hf_id"]
+        b = self.cfg["backends"]["mask2former"]
+        self.hf_id = b["hf_id"]
+        self.score_threshold = scalar(b.get("score_threshold", self.cfg["box_threshold"]))
         self._proc = self._load(AutoImageProcessor, self.hf_id, processor=True)
         self._m_m2f = self._to_device(self._load(Mask2FormerForUniversalSegmentation, self.hf_id))
         self._models = [self._m_m2f]
         self._id2label = {int(k): str(v) for k, v in self._m_m2f.config.id2label.items()}
 
-    def _segment_np(self, rgb: np.ndarray, calib_version: int) -> SegmentationResult:
+    def _segment_np(self, rgb: np.ndarray, calib_version: int, warm_box=None) -> SegmentationResult:
         torch = self._torch
         from PIL import Image
 
@@ -222,7 +278,7 @@ class Mask2FormerBackend(_HFBase):
                 inp["pixel_values"] = inp["pixel_values"].half()
             out = self._m_m2f(**inp)
             res = self._proc.post_process_instance_segmentation(
-                out, threshold=self.box_threshold, mask_threshold=self.mask_threshold, target_sizes=[(h, w)],
+                out, threshold=self.score_threshold, mask_threshold=self.mask_threshold, target_sizes=[(h, w)],
                 return_binary_maps=True,
             )[0]
         info = res["segments_info"]

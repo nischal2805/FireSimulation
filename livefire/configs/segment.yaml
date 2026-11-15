@@ -20,6 +20,9 @@ vocabulary:                        # text prompts for the open-vocabulary backen
 box_threshold: {value: 0.30, unit: "-", range: [0.05, 0.9], status: artistic}    # Grounding DINO / SAM 3 box score cut
 text_threshold: {value: 0.25, unit: "-", range: [0.05, 0.9], status: artistic}   # Grounding DINO text-token score cut
 mask_threshold: {value: 0.5, unit: "-", range: [0.05, 0.95], status: artistic}   # mask logit probability cut
+mask_dedup_iou: {value: 0.85, unit: "-", range: [0.3, 1.0], status: artistic}    # masks of one image with IoU >= this are duplicates (best score kept)
+max_boxes: 32                      # gdino_sam2: top-k boxes by score passed to SAM 2
+local_files_only: false            # true: never touch the network when loading weights (tests, offline runs)
 min_mask_area_px: 400              # masks smaller than this are dropped
 max_instances: 32                  # keep at most this many instances (highest score first)
 backends:
@@ -30,6 +33,7 @@ backends:
     hf_id: facebook/sam3
   mask2former:                     # closed-set COCO instances
     hf_id: facebook/mask2former-swin-tiny-coco-instance
+    score_threshold: {value: 0.30, unit: "-", range: [0.05, 0.95], status: artistic}   # instance score cut (own key, not box_threshold)
 oracle:                            # MOCK: exact obj_id render of the synthetic scene (tests only)
   seed: 1234
   erode_px: 1                      # 3x3 erosion iterations per mask (mimics imperfect model boundaries)

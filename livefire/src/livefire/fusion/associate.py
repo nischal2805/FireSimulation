@@ -323,8 +323,9 @@ def associate_objects(
 
     observations: dict[int, dict[int, int]] = {}
     cats: dict[int, list[str]] = {}
-    for c, t in cid.items():
-        o = new_of.get(t)
+    comp_size = {c: int((vote_comp == c).sum()) for c in range(ncomp)}
+    for c, t in sorted(cid.items(), key=lambda ct: (-comp_size[ct[0]], ct[0])):  # largest component first: it wins
+        o = new_of.get(t)  # the per-view observation when several components (e.g. two table instances) share an object
         if o is None:
             continue
         obs = observations.setdefault(o, {})

@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import warp as wp
 
 from livefire.capture.types import Frame
 from livefire.common.errors import CalibVersionError
@@ -94,6 +95,7 @@ def test_occlusion_behind_block(rig):
     comp_nc = Compositor(snap, volume_scale=1.0)
     v0 = comp_nc.views[0]
     v0.t_far = np.where(v0.t_far > 0, 1e3, 0.0).astype(np.float32)  # ROI/active clip still applies in-kernel
+    v0.t_far_w = wp.array(v0.t_far, dtype=wp.float32, device=comp_nc.device)  # the kernel reads the device copy
     _, L0n = comp_nc.render_volume(0, st)
     (_, s0n) = _centroid(L0n, project(c0, pt)[0][0], r)
     print(f"control (occlusion clip off): cam0/cam1 = {s0n / s1:.2f}")
@@ -186,3 +188,30 @@ def test_active_cell_off_view_renders_without_error_and_is_dark(rig):
             off_view += 1
             assert np.all(L_vol == 0.0) and np.all(T_vol == 1.0)
     assert off_view >= 1, "expected the high cell to be off-view for at least one camera"
+
+
+@pytest.mark.parametrize("scale", [0.5, 1.0])
+def test_device_composite_matches_host_reference(rig, scale):
+    """render() (device splat/fill/composite kernels) == the host NumPy pipeline it replaced, within 1 LSB:
+    linear(frame) darkened by char, mixed to ash by removed, * T_vol + tonemap(L_vol), sRGB (P4 GPU compositor)."""
+    from livefire.render.compositor import _linear_to_srgb_u8
+
+    snap, _, frames, _ = rig
+    comp = Compositor(snap, volume_scale=scale)
+    st = blob_state(snap, G, np.array([[-0.075, 0.0, 0.15], [0.1, 0.05, 0.12]]))
+    rng = np.random.default_rng(7)
+    st.char[:] = rng.uniform(0, 1, len(st.char)).astype(np.float32)
+    st.removed[snap.obj_id == 3] = 1.0  # paper burnt away: exercises the ash mix and the gap fill
+    p = comp.p
+    for cid, c in snap.cameras.items():
+        fr = Frame(cid, frames[cid].rgb, 0, 0, c.calib_version)
+        got = comp.render(cid, fr, st)
+        T_vol, L_vol = comp.render_volume(cid, st)
+        ov = comp.views[cid].overlay
+        base = comp._srgb[fr.rgb] * (1.0 - p["char_dark"] * ov.splat(st.char))[..., None]
+        base = base + (comp.ash - base) * ov.splat(st.removed)[..., None]
+        Le = p["exposure"] * L_vol
+        ref = _linear_to_srgb_u8(base * T_vol[..., None] + Le / (1.0 + Le))
+        assert L_vol.max() > 0.05  # the fire is in view, so the volume path is exercised
+        diff = np.abs(got.astype(int) - ref.astype(int))
+        assert diff.max() <= 1, f"cam{cid}: max diff {diff.max()} at {np.unravel_index(diff.argmax(), diff.shape)}"

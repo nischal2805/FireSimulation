@@ -29,6 +29,7 @@ from livefire.common.bench_csv import device_label
 from livefire.common.config import Params, load_params, load_yaml
 from livefire.common.geometry import AABB, CameraCalibration, project, ray_dirs_camera, zdepth_to_raydist
 from livefire.render.blackbody import T_LUT_MAX, T_LUT_MIN, blackbody_lut
+from livefire.render.composite import composite_kernel, fill_kernel, splat_kernel
 from livefire.render.overlay import OverlayMap
 from livefire.render.volume import march_kernel
 from livefire.scene.snapshot import SceneSnapshot, assert_calib_version
@@ -60,6 +61,12 @@ def _to_np(a: Any) -> NDArray:
 
 def _to_wp3(a: Any, device: str) -> wp.array:
     if isinstance(a, wp.array) and a.dtype == wp.float32 and a.ndim == 3 and str(a.device) == device:
+        return a
+    return wp.array(np.ascontiguousarray(_to_np(a), dtype=np.float32), dtype=wp.float32, device=device)
+
+
+def _to_wp1(a: Any, device: str) -> wp.array:
+    if isinstance(a, wp.array) and a.dtype == wp.float32 and a.ndim == 1 and str(a.device) == device:
         return a
     return wp.array(np.ascontiguousarray(_to_np(a), dtype=np.float32), dtype=wp.float32, device=device)
 
@@ -106,7 +113,18 @@ class _View:
         self.t_near = tn.reshape(self.Hs, self.Ws)
         self.t_far = np.minimum(np.where(hit, tf, 0.0).reshape(self.Hs, self.Ws), t_occ)
         self.t_far = np.where(hole, 0.0, self.t_far)  # hole pixels march nothing
-        self.overlay = OverlayMap(snap, calib, snap.view_depth[calib.cam_id], p["depth_tol"])
+        self.t_near_w = wp.array(self.t_near.astype(np.float32), dtype=wp.float32, device=device)
+        self.t_far_w = wp.array(self.t_far.astype(np.float32), dtype=wp.float32, device=device)
+        self.overlay = ov = OverlayMap(snap, calib, snap.view_depth[calib.cam_id], p["depth_tol"])
+        # device copy of the overlay as a per-pixel CSR element list (static: depends on the snapshot only)
+        order = np.argsort(ov.pix, kind="stable")
+        start = np.searchsorted(ov.pix[order], np.arange(H * W + 1)).astype(np.int32)
+        elem = ov.elem[order].astype(np.int32) if len(order) else np.zeros(1, np.int32)
+        self.ov_start = wp.array(start, dtype=wp.int32, device=device)
+        self.ov_elem = wp.array(elem, dtype=wp.int32, device=device)
+        self.ov_inv = wp.array(ov.inv_count, dtype=wp.float32, device=device)
+        self.ov_fill = wp.array(ov.fill.astype(np.uint8), dtype=wp.uint8, device=device)
+        self.ov_den = wp.array(ov._den.astype(np.float32), dtype=wp.float32, device=device)
 
     def pixel_rect(self, box: AABB) -> tuple[int, int, int, int]:
         """Conservative (u0,u1,v0,v1) exclusive-end volume-pixel rectangle covering a world box, clamped to
@@ -136,6 +154,7 @@ class Compositor:
         self.lut = wp.array(blackbody_lut(), dtype=wp.vec3, device=self.device)
         self.views = {cid: _View(snapshot, c, self.scale, self.p, self.device) for cid, c in snapshot.cameras.items()}
         self._srgb = _srgb_to_linear_lut()
+        self._srgb_w = wp.array(self._srgb, dtype=wp.float32, device=self.device)
         self.ash = np.asarray(self.p.vec("ash_color"), dtype=np.float32)
         self._latency_ms = 0.0
         self.last_volume_ms = 0.0
@@ -172,51 +191,50 @@ class Compositor:
         rmin = np.asarray(fire.roi.min)
         return AABB(rmin + i0 * h, rmin + np.maximum(i1, i0 + 1) * h)
 
-    def render_volume(self, cam_id: int, fire: Any) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-        """Volume only: ``(T_vol (H,W), L_vol (H,W,3))`` float32 at full frame resolution, linear light."""
-        view = self.views[cam_id]
-        t_start = time.perf_counter()
+    def _march(self, view: _View, fire: Any) -> tuple[wp.array, wp.array] | None:
+        """Ray march at volume resolution on the device: ``(T (Hs,Ws), L (Hs,Ws) vec3)``, or None when no cell is
+        active or the active box is off-view (then T = 1, L = 0 everywhere)."""
         Tn, Sn = _to_np(fire.T_g), _to_np(fire.soot)
         g = Tn.shape[0]
         h = float(fire.h_gas)
-        Hs, Ws = view.Hs, view.Ws
-        T_out = np.ones((Hs, Ws), np.float32)
-        L_out = np.zeros((Hs, Ws, 3), np.float32)
         flame = getattr(fire, "flame", None)
         Fn = None if flame is None else _to_np(flame)
         box = self._active_box(Tn, Sn, fire, Fn)
         rect = view.pixel_rect(box) if box is not None else None
-        if box is not None and rect is not None and rect[1] > rect[0] and rect[3] > rect[2]:
-            u0, u1, v0, v1 = rect
-            dsub = view.dirs_np[v0:v1, u0:u1].reshape(-1, 3).astype(np.float64)
-            o = np.broadcast_to(view.origin, dsub.shape)
-            an, af, ahit = box.ray_intersect(o, dsub)
-            sh = (v1 - v0, u1 - u0)
-            t0 = np.full((Hs, Ws), 0.0, np.float32)
-            t1 = np.full((Hs, Ws), 0.0, np.float32)
-            t0[v0:v1, u0:u1] = np.maximum(view.t_near[v0:v1, u0:u1], an.reshape(sh))
-            t1[v0:v1, u0:u1] = np.minimum(view.t_far[v0:v1, u0:u1], np.where(ahit, af, 0.0).reshape(sh))
-            dev = self.device
-            t_k = time.perf_counter()
-            Tw, Sw = _to_wp3(fire.T_g, dev), _to_wp3(fire.soot, dev)
-            Fw = wp.zeros((g, g, g), dtype=wp.float32, device=dev) if flame is None else _to_wp3(flame, dev)
-            oT = wp.array(T_out, dtype=wp.float32, device=dev)
-            oL = wp.array(L_out, dtype=wp.vec3, device=dev)
-            p = self.p
-            wp.launch(
-                march_kernel, dim=(v1 - v0, u1 - u0),
-                inputs=[Tw, Sw, Fw, self.lut, view.dirs, wp.array(t0, dtype=wp.float32, device=dev),
-                        wp.array(t1, dtype=wp.float32, device=dev), wp.vec3(*view.origin), wp.vec3(*fire.roi.min),
-                        h, g, p["step_factor"] * h, p["t_min"], p["emission_scale"], p["T_emit_min"],
-                        p["T_emit_ref"], p["emission_power"], p["k_abs"], self.t_amb, p["dT_flame"], p["flame_ref"],
-                        p["soot_albedo"] * p["ambient"],
-                        T_LUT_MIN, T_LUT_MAX, u0, v0, oT, oL],
-                device=dev,
-            )  # fmt: skip
-            wp.synchronize_device(dev)
-            self.last_march_ms = (time.perf_counter() - t_k) * 1e3
-            T_out, L_out = oT.numpy(), oL.numpy()
-        if (Hs, Ws) != (view.calib.height, view.calib.width):
+        if box is None or rect is None or rect[1] <= rect[0] or rect[3] <= rect[2]:
+            return None
+        u0, u1, v0, v1 = rect
+        dev = self.device
+        t_k = time.perf_counter()
+        Tw, Sw = _to_wp3(fire.T_g, dev), _to_wp3(fire.soot, dev)
+        Fw = wp.zeros((g, g, g), dtype=wp.float32, device=dev) if flame is None else _to_wp3(flame, dev)
+        oT = wp.full((view.Hs, view.Ws), 1.0, dtype=wp.float32, device=dev)
+        oL = wp.zeros((view.Hs, view.Ws), dtype=wp.vec3, device=dev)
+        p = self.p
+        wp.launch(
+            march_kernel, dim=(v1 - v0, u1 - u0),
+            inputs=[Tw, Sw, Fw, self.lut, view.dirs, view.t_near_w, view.t_far_w, wp.vec3(*box.min),
+                    wp.vec3(*box.max), wp.vec3(*view.origin), wp.vec3(*fire.roi.min),
+                    h, g, p["step_factor"] * h, p["t_min"], p["emission_scale"], p["T_emit_min"],
+                    p["T_emit_ref"], p["emission_power"], p["k_abs"], self.t_amb, p["dT_flame"], p["flame_ref"],
+                    p["soot_albedo"] * p["ambient"],
+                    T_LUT_MIN, T_LUT_MAX, u0, v0, oT, oL],
+            device=dev,
+        )  # fmt: skip
+        wp.synchronize_device(dev)
+        self.last_march_ms = (time.perf_counter() - t_k) * 1e3
+        return oT, oL
+
+    def render_volume(self, cam_id: int, fire: Any) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Volume only: ``(T_vol (H,W), L_vol (H,W,3))`` float32 at full frame resolution, linear light (host)."""
+        view = self.views[cam_id]
+        t_start = time.perf_counter()
+        r = self._march(view, fire)
+        if r is None:
+            T_out, L_out = np.ones((view.Hs, view.Ws), np.float32), np.zeros((view.Hs, view.Ws, 3), np.float32)
+        else:
+            T_out, L_out = r[0].numpy(), r[1].numpy()
+        if (view.Hs, view.Ws) != (view.calib.height, view.calib.width):
             size = (view.calib.width, view.calib.height)
             T_out = cv2.resize(T_out, size, interpolation=cv2.INTER_LINEAR)
             L_out = cv2.resize(L_out, size, interpolation=cv2.INTER_LINEAR)
@@ -224,26 +242,37 @@ class Compositor:
         return T_out, L_out
 
     def render(self, cam_id: int, frame: Frame, fire: Any) -> NDArray[np.uint8]:
-        """Composite the fire over ``frame`` for camera ``cam_id``; see module docstring.
+        """Composite the fire over ``frame`` for camera ``cam_id``; see module docstring. Everything after the
+        active-box test runs on the device (``render.composite`` kernels); one frame upload, one result download.
 
         Raises KeyError for an unknown cam_id and CalibVersionError for a calib mismatch."""
         if cam_id not in self.views:
             raise KeyError(f"unknown cam_id {cam_id}")
         assert_calib_version(self.snap, frame)
         view = self.views[cam_id]
-        if frame.rgb.shape[:2] != (view.calib.height, view.calib.width):
-            raise ValueError(f"frame shape {frame.rgb.shape} != camera {view.calib.height}x{view.calib.width}")
+        H, W = view.calib.height, view.calib.width
+        if frame.rgb.shape[:2] != (H, W):
+            raise ValueError(f"frame shape {frame.rgb.shape} != camera {H}x{W}")
         t0 = time.perf_counter()
-        T_vol, L_vol = self.render_volume(cam_id, fire)
+        dev = self.device
+        vol = self._march(view, fire)
+        self.last_volume_ms = (time.perf_counter() - t0) * 1e3
+        rgb = wp.array(np.ascontiguousarray(frame.rgb, dtype=np.uint8), dtype=wp.uint8, device=dev)
+        cr = wp.empty((H, W), dtype=wp.vec2, device=dev)
+        wp.launch(splat_kernel, dim=(H, W), device=dev,
+                  inputs=[view.ov_start, view.ov_elem, view.ov_inv, _to_wp1(fire.char, dev),
+                          _to_wp1(fire.removed, dev), W, cr])  # fmt: skip
+        crf = wp.empty((H, W), dtype=wp.vec2, device=dev)
+        wp.launch(fill_kernel, dim=(H, W), inputs=[cr, view.ov_fill, view.ov_den, H, W, crf], device=dev)
+        has_vol = vol is not None
+        if vol is None:  # kernel still needs valid arrays; has_vol = 0 makes it ignore them
+            vol = (wp.ones((1, 1), dtype=wp.float32, device=dev), wp.zeros((1, 1), dtype=wp.vec3, device=dev))
+        out = wp.empty((H, W, 3), dtype=wp.uint8, device=dev)
         p = self.p
-        base = self._srgb[frame.rgb]  # (H,W,3) linear
-        char = view.overlay.splat(_to_np(fire.char))
-        removed = view.overlay.splat(_to_np(fire.removed))
-        base = base * (1.0 - p["char_dark"] * char)[..., None]
-        base = base + (self.ash - base) * removed[..., None]
-        Le = p["exposure"] * L_vol
-        out = base * T_vol[..., None] + Le / (1.0 + Le)
-        res = _linear_to_srgb_u8(out)
+        wp.launch(composite_kernel, dim=(H, W), device=dev,
+                  inputs=[rgb, self._srgb_w, crf, vol[0], vol[1], int(has_vol),
+                          view.Ws / W, view.Hs / H, p["char_dark"], wp.vec3(*self.ash), p["exposure"], out])  # fmt: skip
+        res = out.numpy()
         self._latency_ms = (time.perf_counter() - t0) * 1e3
         return res
 

@@ -51,8 +51,10 @@ def march_kernel(
     flame: wp.array3d(dtype=wp.float32),  # combustion intensity [W/m^3] (ADR-0004)
     lut: wp.array(dtype=wp.vec3),
     dirs: wp.array2d(dtype=wp.vec3),  # (Hs,Ws) unit world directions
-    t0: wp.array2d(dtype=wp.float32),  # (Hs,Ws) march start, ray distance [m]
-    t1: wp.array2d(dtype=wp.float32),  # (Hs,Ws) march end; t1 <= t0 marches nothing
+    t0: wp.array2d(dtype=wp.float32),  # (Hs,Ws) static march start (ROI entry), ray distance [m]
+    t1: wp.array2d(dtype=wp.float32),  # (Hs,Ws) static march end (ROI exit / occluder / 0 for holes)
+    box_min: wp.vec3,  # active-cell AABB: the march is further clipped to [entry, exit] of this box
+    box_max: wp.vec3,
     origin: wp.vec3,
     roi_min: wp.vec3,
     h: float,
@@ -78,12 +80,27 @@ def march_kernel(
     iv, iu = wp.tid()  # launch dim = (rows, cols)
     u = iu + u_off
     v = iv + v_off
-    ta = t0[v, u]
-    tb = t1[v, u]
+    d = dirs[v, u]
+    # slab test against the active box (AABB.ray_intersect semantics: t >= 0, a miss marches nothing)
+    bn = float(0.0)  # noqa: UP018 (Warp: mutable loop variable)
+    bf = float(1.0e30)  # noqa: UP018 (Warp: mutable loop variable)
+    for a in range(3):
+        if d[a] == 0.0:
+            if origin[a] < box_min[a] or origin[a] > box_max[a]:
+                bf = -1.0
+        else:
+            s1 = (box_min[a] - origin[a]) / d[a]
+            s2 = (box_max[a] - origin[a]) / d[a]
+            bn = wp.max(bn, wp.min(s1, s2))
+            bf = wp.min(bf, wp.max(s1, s2))
+    if bf < bn:
+        bn = 0.0
+        bf = 0.0
+    ta = wp.max(t0[v, u], bn)
+    tb = wp.min(t1[v, u], bf)
     tr = float(1.0)  # noqa: UP018 (Warp: mutable loop variable needs an explicit float)
     rad = wp.vec3(0.0, 0.0, 0.0)
     if tb > ta:
-        d = dirs[v, u]
         t = ta
         while t < tb and tr >= t_min:
             seg = wp.min(ds, tb - t)

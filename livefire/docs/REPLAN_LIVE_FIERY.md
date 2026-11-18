@@ -339,6 +339,27 @@ plane coverage and camera height; writes an image with the plane highlighted nex
 (on a still clip of a table from a fixed phone the result is far more meaningful than on `test.mp4`). Compare MoGe-2 and
 UniDepthV2 the same way for ADR-0008.
 
+### 11.1 First board-free fire on a real frame (prototype of M1 + M2)
+
+`bench/board_free_still_demo.py` runs the whole chain on ONE still frame of a real video, with no board:
+Depth Pro (metric depth + focal) -> RANSAC plane -> world frame -> the frame played as a still clip through the
+**unchanged** acquisition pipeline (`acquire_with_report` with a fixed-depth backend) -> snapshot -> click -> ignite ->
+simulate -> composite. Command used:
+
+`uv run python bench/board_free_still_demo.py "E:/el 7th sem/FireSimulation/test.mp4" --click 250 400 --material cloth --seconds 8 --out out/board_free_bed`
+
+Result on frame 0 of `test.mp4` (RTX 4060): depth pro 9.0 s; snapshot 7483 surface elements, the bed plane became the
+"table" object (obj 0, default material `other_nonflammable`, so a click lit 0 elements until `--material cloth`
+overrode it) plus 8 clustered objects; with cloth, 88 elements lit at the click (world point within 2 mm of the
+plane); 8 s simulated in 16.9 s wall (single view 854x480, G=96).
+
+What the user saw (video sent in chat): **the fire is in the right place** (on the bed at the click, occluded
+correctly by the pillow) **but looks like an orange glowing blob/column**, no visible flames licking the surface,
+no visible spread or char within 8 s. This confirms the plan: geometry/placement without a board works; the look
+(M3: surface-attached flames, noise, ember front, char, smoke) and the spread rate for cloth are the next work.
+Also needed: when the dominant plane is not a table (bed, floor), do not force the "table" non-flammable default;
+pick materials per object (M5) or from the click.
+
 ## 12. Prompt for the new Claude session (paste this)
 
 > I'm continuing the LiveFire project on my Windows 11 + RTX 4060 laptop. Repo `nischal2805/FireSimulation`, branch

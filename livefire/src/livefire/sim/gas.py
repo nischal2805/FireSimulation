@@ -189,6 +189,8 @@ def sample_t_k(
     out[e] = _samp(t, q, wp.vec3(0.5, 0.5, 0.5))
 
 
+# Single-writer face updates below use `a[i] = a[i] + x`, not `a[i] += x`: in Warp `+=` on an array is an atomic,
+# and RUN_TO_RUN determinism wraps every atomic kernel in memsets and blocking device-to-host copies.
 @wp.kernel
 def buoyancy_k(
     w: wp.array3d(dtype=wp.float32), t: wp.array3d(dtype=wp.float32), fw: wp.array3d(dtype=wp.int32),
@@ -203,7 +205,7 @@ def buoyancy_k(
         tf = t[i, j, n - 1]
     else:
         tf = 0.5 * (t[i, j, k - 1] + t[i, j, k])
-    w[i, j, k] += dt * g_acc * (tf - t_amb) / t_amb
+    w[i, j, k] = w[i, j, k] + (dt * g_acc * (tf - t_amb) / t_amb)
 
 
 @wp.kernel
@@ -272,14 +274,14 @@ def confinement_force_k(
 def apply_force_u_k(u: wp.array3d(dtype=wp.float32), f: wp.array3d(dtype=wp.vec3), fu: wp.array3d(dtype=wp.int32), dt: float):
     i, j, k = wp.tid()
     if fu[i, j, k] == 0:
-        u[i, j, k] += dt * 0.5 * (f[i - 1, j, k][0] + f[i, j, k][0])
+        u[i, j, k] = u[i, j, k] + (dt * 0.5 * (f[i - 1, j, k][0] + f[i, j, k][0]))
 
 
 @wp.kernel
 def apply_force_v_k(v: wp.array3d(dtype=wp.float32), f: wp.array3d(dtype=wp.vec3), fv: wp.array3d(dtype=wp.int32), dt: float):
     i, j, k = wp.tid()
     if fv[i, j, k] == 0:
-        v[i, j, k] += dt * 0.5 * (f[i, j - 1, k][1] + f[i, j, k][1])
+        v[i, j, k] = v[i, j, k] + (dt * 0.5 * (f[i, j - 1, k][1] + f[i, j, k][1]))
 
 
 @wp.kernel
@@ -288,9 +290,9 @@ def apply_force_w_k(w: wp.array3d(dtype=wp.float32), f: wp.array3d(dtype=wp.vec3
     if fw[i, j, k] == 0:
         n = w.shape[2] - 1
         if k >= n:
-            w[i, j, k] += dt * f[i, j, n - 1][2]
+            w[i, j, k] = w[i, j, k] + (dt * f[i, j, n - 1][2])
         else:
-            w[i, j, k] += dt * 0.5 * (f[i, j, k - 1][2] + f[i, j, k][2])
+            w[i, j, k] = w[i, j, k] + (dt * 0.5 * (f[i, j, k - 1][2] + f[i, j, k][2]))
 
 
 @wp.kernel
@@ -325,16 +327,15 @@ def enforce_k(a: wp.array3d(dtype=wp.float32), fixed: wp.array3d(dtype=wp.int32)
 @wp.kernel
 def divergence_k(
     u: wp.array3d(dtype=wp.float32), v: wp.array3d(dtype=wp.float32), w: wp.array3d(dtype=wp.float32),
-    solid: wp.array3d(dtype=wp.int32), div: wp.array3d(dtype=wp.float32), norms: wp.array(dtype=wp.float64),
-    slot: int, inv_h: float,
+    solid: wp.array3d(dtype=wp.int32), div: wp.array3d(dtype=wp.float32), inv_h: float,
 ):  # fmt: skip
+    # no norm accumulation here: one global atomic per cell dominated the step under RUN_TO_RUN determinism;
+    # divergence_norms() reduces the stored field on demand instead
     i, j, k = wp.tid()
     if solid[i, j, k] != 0:
         div[i, j, k] = 0.0
         return
-    d = (u[i + 1, j, k] - u[i, j, k] + v[i, j + 1, k] - v[i, j, k] + w[i, j, k + 1] - w[i, j, k]) * inv_h
-    div[i, j, k] = d
-    wp.atomic_add(norms, slot, wp.float64(d) * wp.float64(d))
+    div[i, j, k] = (u[i + 1, j, k] - u[i, j, k] + v[i, j + 1, k] - v[i, j, k] + w[i, j, k + 1] - w[i, j, k]) * inv_h
 
 
 @wp.kernel
@@ -377,18 +378,65 @@ def rbgs_k(
         p[i, j, k] = 0.0
 
 
+def rbgs_mask(solid: np.ndarray, fu: np.ndarray, fv: np.ndarray, fw: np.ndarray) -> np.ndarray:
+    """Per-cell uint8 for ``rbgs_mask_k``: bits 0..5 = face open (flag 0) at -x, +x, -y, +y, -z, +z; bit 6 = solid.
+    Replaces seven int32 reads per cell with one byte (the face flags are static)."""
+    m = ((fu[:-1] == 0) * 1 + (fu[1:] == 0) * 2 + (fv[:, :-1] == 0) * 4 + (fv[:, 1:] == 0) * 8
+         + (fw[:, :, :-1] == 0) * 16 + (fw[:, :, 1:] == 0) * 32 + (solid != 0) * 64)  # fmt: skip
+    return m.astype(np.uint8)
+
+
+@wp.kernel
+def rbgs_mask_k(
+    p: wp.array3d(dtype=wp.float32), div: wp.array3d(dtype=wp.float32), mask: wp.array3d(dtype=wp.uint8),
+    color: int, h2_dt: float,
+):  # fmt: skip
+    """``rbgs_k`` with the face flags packed by :func:`rbgs_mask`; same summation order, so bit-identical."""
+    i, j, kk = wp.tid()
+    k = 2 * kk + ((i + j + color) & 1)
+    m = int(mask[i, j, k])
+    if (m & 64) != 0:
+        return
+    g = p.shape[0]
+    n = float(0.0)  # noqa: UP018
+    s = float(0.0)  # noqa: UP018
+    if (m & 1) != 0:
+        n += 1.0
+        s += p[i - 1, j, k]
+    if (m & 2) != 0:
+        n += 1.0
+        s += p[i + 1, j, k]
+    if (m & 4) != 0:
+        n += 1.0
+        s += p[i, j - 1, k]
+    if (m & 8) != 0:
+        n += 1.0
+        s += p[i, j + 1, k]
+    if (m & 16) != 0:
+        n += 1.0
+        s += p[i, j, k - 1]
+    if (m & 32) != 0:
+        n += 1.0
+        if k + 1 < g:
+            s += p[i, j, k + 1]
+    if n > 0.0:
+        p[i, j, k] = (s - h2_dt * div[i, j, k]) / n
+    else:
+        p[i, j, k] = 0.0
+
+
 @wp.kernel
 def grad_u_k(u: wp.array3d(dtype=wp.float32), p: wp.array3d(dtype=wp.float32), fu: wp.array3d(dtype=wp.int32), c: float):
     i, j, k = wp.tid()
     if fu[i, j, k] == 0:
-        u[i, j, k] -= c * (p[i, j, k] - p[i - 1, j, k])
+        u[i, j, k] = u[i, j, k] - (c * (p[i, j, k] - p[i - 1, j, k]))
 
 
 @wp.kernel
 def grad_v_k(v: wp.array3d(dtype=wp.float32), p: wp.array3d(dtype=wp.float32), fv: wp.array3d(dtype=wp.int32), c: float):
     i, j, k = wp.tid()
     if fv[i, j, k] == 0:
-        v[i, j, k] -= c * (p[i, j, k] - p[i, j - 1, k])
+        v[i, j, k] = v[i, j, k] - (c * (p[i, j, k] - p[i, j - 1, k]))
 
 
 @wp.kernel
@@ -398,7 +446,7 @@ def grad_w_k(w: wp.array3d(dtype=wp.float32), p: wp.array3d(dtype=wp.float32), f
         pb = float(0.0)  # noqa: UP018
         if k < p.shape[2]:
             pb = p[i, j, k]
-        w[i, j, k] -= c * (pb - p[i, j, k - 1])
+        w[i, j, k] = w[i, j, k] - (c * (pb - p[i, j, k - 1]))
 
 
 @wp.kernel
@@ -469,6 +517,7 @@ class GasSolver:
         fw[:, :, 1:G] |= solid[:, :, :-1] | solid[:, :, 1:]
         fw[:, :, G] = solid[:, :, G - 1]  # open top face is blocked only if its cell is solid
         self.fu, self.fv, self.fw = (to_device(a, wp.int32, d) for a in (fu, fv, fw))
+        self._rb_mask = to_device(rbgs_mask(solid, fu, fv, fw), wp.uint8, d)  # static: built from the flags above
         z3 = lambda *s: wp.zeros(s, dtype=wp.float32, device=d)
         self.u, self.v, self.w = z3(G + 1, G, G), z3(G, G + 1, G), z3(G, G, G + 1)
         self._u2, self._v2, self._w2 = z3(G + 1, G, G), z3(G, G + 1, G), z3(G, G, G + 1)
@@ -480,13 +529,13 @@ class GasSolver:
         self._f2 = z3(G, G, G)
         self._no_power = z3(1)  # zeros stand-in (resized on demand) for steps without released-power input
         self.p = z3(G, G, G)
-        self._div = z3(G, G, G)
+        self._div = z3(G, G, G)  # divergence before the last projection (RBGS right-hand side)
+        self._div_after = z3(G, G, G)  # divergence after the last projection
         self._cv = wp.zeros((G, G, G), dtype=wp.vec3, device=d)
         self._om = wp.zeros((G, G, G), dtype=wp.vec3, device=d)
         self._fc = wp.zeros((G, G, G), dtype=wp.vec3, device=d)
         self._omm = z3(G, G, G)
         self._inflow = wp.zeros((G, G), dtype=wp.float32, device=d)
-        self._norms = wp.zeros(2, dtype=wp.float64, device=d)
         self._vel_clamps = wp.zeros(1, dtype=wp.int32, device=d)
         self._T_clamps = wp.zeros(1, dtype=wp.int32, device=d)
         self._lost = wp.zeros(1, dtype=wp.int32, device=d)
@@ -496,10 +545,10 @@ class GasSolver:
     # ---- state ------------------------------------------------------------------------------
     def reset(self) -> None:
         """Quiescent ambient state; counters cleared."""
-        for a in (self.u, self.v, self.w, self.soot, self.flame, self.p):
+        for a in (self.u, self.v, self.w, self.soot, self.flame, self.p, self._div, self._div_after):
             a.zero_()
         self.T_g.fill_(self._p["T_amb"])
-        for c in (self._vel_clamps, self._T_clamps, self._lost, self._norms):
+        for c in (self._vel_clamps, self._T_clamps, self._lost):
             c.zero_()
         self.step_count = 0
 
@@ -528,40 +577,35 @@ class GasSolver:
         wp.launch(enforce_k, dim=self.v.shape, inputs=[self.v, self.fv], device=d)
         wp.launch(enforce_k, dim=self.w.shape, inputs=[self.w, self.fw], device=d)
 
-    def _divergence(self, slot: int) -> None:
-        wp.launch(
-            divergence_k, dim=(self.G,) * 3, device=self.device,
-            inputs=[self.u, self.v, self.w, self.solid, self._div, self._norms, slot, 1.0 / self.h],
-        )  # fmt: skip
+    def _divergence(self, out: wp.array) -> None:
+        wp.launch(divergence_k, dim=(self.G,) * 3, device=self.device,
+                  inputs=[self.u, self.v, self.w, self.solid, out, 1.0 / self.h])  # fmt: skip
 
     def project(self, dt: float, n_iters: int | None = None) -> tuple[float, float]:
         """Pressure projection (``n_iters`` red-black GS iterations, warm-started from the previous ``p``).
         Returns ``(||div||_2 before, after)`` over fluid cells [1/s] (syncs; for tests)."""
-        self._norms.zero_()
         self._project(dt, int(self._p["n_iters"]) if n_iters is None else int(n_iters))
         return self.divergence_norms()
 
     def _project(self, dt: float, n_iters: int) -> None:
         d, G, h = self.device, self.G, self.h
         self.enforce_boundaries()
-        self._divergence(0)
+        self._divergence(self._div)
         h2_dt = h * h / dt
         for _ in range(n_iters):
             for color in (0, 1):
-                wp.launch(
-                    rbgs_k, dim=(G, G, G // 2), device=d,
-                    inputs=[self.p, self._div, self.solid, self.fu, self.fv, self.fw, color, h2_dt],
-                )  # fmt: skip
+                wp.launch(rbgs_mask_k, dim=(G, G, G // 2), device=d,
+                          inputs=[self.p, self._div, self._rb_mask, color, h2_dt])  # fmt: skip
         c = dt / h
         wp.launch(grad_u_k, dim=self.u.shape, inputs=[self.u, self.p, self.fu, c], device=d)
         wp.launch(grad_v_k, dim=self.v.shape, inputs=[self.v, self.p, self.fv, c], device=d)
         wp.launch(grad_w_k, dim=self.w.shape, inputs=[self.w, self.p, self.fw, c], device=d)
-        self._divergence(1)
+        self._divergence(self._div_after)
 
     def divergence_norms(self) -> tuple[float, float]:
         """``(before, after)`` ``||div u||_2`` of the last projection (syncs)."""
-        n = np.sqrt(self._norms.numpy())
-        return float(n[0]), float(n[1])
+        b, a = (float(np.sqrt(np.square(x.numpy(), dtype=np.float64).sum())) for x in (self._div, self._div_after))
+        return b, a
 
     # ---- main step --------------------------------------------------------------------------
     def step(
@@ -623,7 +667,6 @@ class GasSolver:
         for a in (self.u, self.v, self.w):
             wp.launch(clamp_face_k, dim=a.shape, inputs=[a, vmax, self._vel_clamps], device=d)
         # 7. projection
-        self._norms.zero_()
         self._project(dt, int(p["n_iters"]))
         # 8. cooling, soot decay, temperature clamp
         wp.launch(

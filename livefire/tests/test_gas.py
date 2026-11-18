@@ -314,3 +314,26 @@ def test_vorticity_confinement_preserves_vortex():
     print(f"\npeak |omega_z| after 40 steps: eps_vc=0 {w0:.3f}, eps_vc=1 {w1:.3f}")
     assert np.isfinite(w0) and np.isfinite(w1) and w0 > 0
     assert w1 > w0
+
+
+def test_rbgs_mask_kernel_is_bit_identical_to_flag_kernel():
+    """P4: the packed-mask RBGS half-sweep (production) equals the int32-flag reference sweep bit for bit, with
+    solids, walls and the open top face present."""
+    from livefire.sim.gas import rbgs_k, rbgs_mask_k
+
+    solid = np.zeros((G,) * 3, np.uint8)
+    solid[10:16, 12:20, 0:6] = 1  # a block on the floor
+    solid[20:22, 4:9, 25:G] = 1  # a slab touching the open top
+    s = solver(solid)
+    rng = np.random.default_rng(3)
+    p0 = rng.standard_normal((G,) * 3).astype(np.float32)
+    div = wp.array(rng.standard_normal((G,) * 3).astype(np.float32), dtype=wp.float32, device=DEV)
+    pa = wp.array(p0, dtype=wp.float32, device=DEV)
+    pb = wp.array(p0, dtype=wp.float32, device=DEV)
+    for _ in range(3):
+        for color in (0, 1):
+            wp.launch(rbgs_k, dim=(G, G, G // 2), device=DEV,
+                      inputs=[pa, div, s.solid, s.fu, s.fv, s.fw, color, 0.37])  # fmt: skip
+            wp.launch(rbgs_mask_k, dim=(G, G, G // 2), device=DEV, inputs=[pb, div, s._rb_mask, color, 0.37])
+    assert np.array_equal(pa.numpy(), pb.numpy())
+    assert not np.array_equal(pa.numpy(), p0)  # the sweeps did something

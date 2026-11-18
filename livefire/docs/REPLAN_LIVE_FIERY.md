@@ -313,7 +313,24 @@ Suggested first concrete steps for the next session:
 
 ## 11. Board-free geometry spike result (Depth Pro, 2026-11-18)
 
-Pending at the time of the handoff commit (the 1.9 GB `apple/DepthPro-hf` download was still running). Script:
+Result on the first frame of `test.mp4` (854x480, real room: bed, pillow, headboard, desk with laptop), RTX 4060,
+fp16, measured by the script below (not a committed CSV; re-run to reproduce):
+
+| Quantity | Value |
+| --- | --- |
+| Latency per frame | 1039 ms (setup-time only, acceptable) |
+| Peak VRAM | 3767 MB (must be unloaded before the simulation starts) |
+| Estimated focal length | 760 px (horizontal FOV 58.6 deg) |
+| Depth p5 / p50 / p95 | 1.21 / 1.69 / 2.04 m (plausible for the room) |
+| Largest plane in the lower half (1 cm band) | 9.5 % of pixels: the bed surface; camera 0.80 m above it |
+
+Visual check: the depth map is sharp and plausible (laptop, desk legs, pillow and headboard edges crisp). The plane
+picked was the bed, not the desk (the desk top is smaller in this view), so M1 needs plane selection: the largest
+near-horizontal plane, or the plane under the user's first click. No ground truth was available, so metric accuracy is
+**not** measured yet: next, a still clip of a table with a tape-measured distance (or the old ChArUco board as ground
+truth) and the same run for MoGe-2 and UniDepthV2. Verdict so far: viable as the board-free path for M1.
+
+Script:
 `bench/depthpro_board_free_spike.py` (one frame -> Depth Pro metric depth + focal length -> back-projection -> RANSAC of
 the dominant plane in the lower half of the image, 1 cm inlier band; prints latency, VRAM, focal/FOV, depth percentiles,
 plane coverage and camera height; writes an image with the plane highlighted next to the depth map). Run from

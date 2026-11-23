@@ -1,4 +1,4 @@
-.PHONY: interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
+.PHONY: live interactive capture capture-headless latency-timer setup test test-slow lint run run-rt bench bench-spike plots calibrate eval
 
 setup:
 	uv sync --all-groups --all-extras
@@ -40,6 +40,9 @@ eval:
 	@echo "not implemented until P1"; exit 2
 
 # Interactive viewer on the synthetic scene: left click ignites, right click selects, keys 1-8 set material, q quits
+live:
+	uv run --extra depth python -m livefire.app live
+
 interactive:
 	uv run python -m livefire.app interactive --scene table_v1
 

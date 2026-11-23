@@ -23,6 +23,7 @@ treat the GPU and Windows paths as untested.
 
 | Feature | Command |
 | --- | --- |
+| **Burn a real scene (live cameras)** | `uv run --extra depth python -m livefire.app live` (needs calibration, see below) |
 | Click on the synthetic scene to start fires | `uv run python -m livefire.app interactive --scene table_v1` |
 | Offline two-view fire demo video | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` |
 | See your cameras (fps, frame age, skew, status) and record clips | `uv run python -m livefire.app capture` (add `--record data/clips/run1 --seconds 10`) |
@@ -62,6 +63,7 @@ column. No code path shells out to bash.
 | `make lint` | `uv run ruff check src tests bench` | lint |
 | `make run` | `uv run python -m livefire.app run --scene table_v1 --out out/demo --grid 48 --offline --seconds 6 --ignite "-0.075,0.0,0.1@0.3:0.06"` | offline demo video `out/demo/composite.mp4` |
 | `make run-rt` | `uv run python -m livefire.app run --scene table_v1 --out out/demo_rt --seconds 20 --ignite "-0.075,0.0,0.1@0.3:0.06"` | real-time run (needs a GPU to be real time) |
+| `make live` | `uv run --extra depth python -m livefire.app live` | live cameras: acquire, then click to ignite |
 | `make interactive` | `uv run python -m livefire.app interactive --scene table_v1` | click-to-ignite viewer |
 | `make capture` | `uv run python -m livefire.app capture` | live camera check |
 | `make capture-headless` | `uv run python -m livefire.app capture --headless --seconds 5` | camera check without a window |
@@ -158,3 +160,13 @@ livefire/
 [`COORDINATE_CONVENTIONS`](docs/COORDINATE_CONVENTIONS.md) · [`TEST_STRATEGY`](docs/TEST_STRATEGY.md) ·
 [`PERFORMANCE_BUDGET`](docs/PERFORMANCE_BUDGET.md) · [`decisions/`](docs/decisions) (ADRs) ·
 [`tasks/`](docs/tasks) (plans) · [`reports/`](docs/reports) (phase reports) · [`literature`](docs/literature.md)
+
+## Live mode runbook (burn a real object)
+
+1. `uv run python -m livefire.app calib board --out board.png --dpi 300`; print at 100 %, measure one square, set `square_length_m` in `configs/calibration.yaml`.
+2. Edit `configs/cameras.yaml` (USB index, or the phone URL such as `http://<phone-ip>:8080/video`).
+3. Per camera: `calib intrinsics --cam N`. Then lay the board flat on the table in view of all cameras: `calib extrinsics`.
+4. Put objects on the table (board may stay, keep objects off its footprint), leave the scene still, run `make live`.
+   It captures about 5 s, builds the scene (the first run downloads the depth model), then opens the window.
+5. Left click an object to ignite it. Right click selects, keys 1-8 set the material (default is paper), `o` shows the
+   reconstructed geometry, `r` re-acquires after you move something, `q` quits.

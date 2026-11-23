@@ -112,6 +112,10 @@ class InteractiveSession:
                 x, y = lay.from_view(pane, ev.u, ev.v)
                 cv2.drawMarker(img, (round(x), round(y)), (255, 255, 255), cv2.MARKER_CROSS, 10, 1)
 
+    def _frames(self) -> dict[int, Any]:
+        """Newest frame per camera (``Frame`` or None), stamped with the snapshot's calib_version."""
+        return {s.cam_id: s.latest() for s in self.sources}
+
     def compose(self, wall_dt: float) -> np.ndarray:
         """Advance the sim by ``wall_dt`` s, render the visible views and return the display image (H,W,3 uint8
         RGB) with overlays and HUD."""
@@ -122,7 +126,7 @@ class InteractiveSession:
         cams = ctl.visible_cams()
         lay = self.layout
         panes = []
-        frames = {s.cam_id: s.latest() for s in self.sources}
+        frames = self._frames()
         for i, c in enumerate(cams):
             f = frames[c]
             if f is None:
@@ -149,7 +153,11 @@ def run_interactive(scene: str, grid: int | None, out: Path, max_w: int | None =
     the session is also recorded to ``out`` (events, config, digest) so ``replay <out>`` reproduces it.
     ``max_w``/``max_h`` default to the detected screen size (fallback 1600x900)."""
     max_w, max_h = fit_limits(max_w, max_h)
-    sess = InteractiveSession(scene, grid, max_w, max_h)
+    return run_session(InteractiveSession(scene, grid, max_w, max_h), scene, out, frames, record)
+
+
+def run_session(sess: InteractiveSession, scene: str, out: Path, frames: int | None = None, record: bool = False) -> int:
+    """Window loop for any session (synthetic or live). ``sess.controller`` may be replaced by a re-acquire."""
     ctl = sess.controller
     ctl.start()
     for s in sess.sources:
@@ -189,6 +197,7 @@ def run_interactive(scene: str, grid: int | None, out: Path, max_w: int | None =
                 ctl.message = f"saved {path}"
             if ctl.reacquire_requested:
                 sess.reacquire()
+                ctl = sess.controller
             n += 1
             spare = 1.0 / sess.fps - (time.perf_counter() - now)
             if spare > 0:

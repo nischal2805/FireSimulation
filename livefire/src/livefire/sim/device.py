@@ -11,7 +11,14 @@ wp.config.quiet = True
 # gas.py scatters with float atomic_add, whose summation order is nondeterministic on CUDA. Warp's RUN_TO_RUN mode
 # makes such atomics reproducible between runs on the same GPU/driver/build. Must be set before any module is
 # created. GPU replay relies on it and must be confirmed on the RTX 4060 (ADR-0002); CPU is serial and exact.
-wp.config.deterministic = wp.DeterministicMode.RUN_TO_RUN
+# It costs Python-side checks on every kernel launch, so it is off by default (configs/app.yaml: deterministic, or env
+# LIVEFIRE_DETERMINISTIC=1) and GPU replays compare with a tolerance instead of an exact digest.
+import os
+
+if os.environ.get("LIVEFIRE_DETERMINISTIC", "").lower() in ("1", "true", "yes") or bool(
+    load_yaml("app").get("deterministic", False)
+):
+    wp.config.deterministic = wp.DeterministicMode.RUN_TO_RUN
 _initialised = False
 
 

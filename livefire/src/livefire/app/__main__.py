@@ -47,6 +47,16 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--max-width", type=int, default=None)
     lv.add_argument("--max-height", type=int, default=None)
     lv.add_argument("--frames", type=int, default=None, help="exit after N frames (smoke testing)")
+    q = sub.add_parser("quicklive", help="ONE uncalibrated camera (phone IP cam): the table plane defines the world")
+    q.add_argument("--source", required=True, help="stream URL (e.g. http://<phone-ip>:8080/video) or USB index")
+    q.add_argument("--fov", type=float, default=65.0, help="assumed horizontal field of view in degrees")
+    q.add_argument("--depth", default=None, help="metric depth backend (default configs/depth.yaml)")
+    q.add_argument("--top-down", action="store_true", help="camera looks straight down at the table")
+    q.add_argument("--grid", type=int, default=None, help="gas grid G override")
+    q.add_argument("--out", default="out/quicklive")
+    q.add_argument("--max-width", type=int, default=None)
+    q.add_argument("--max-height", type=int, default=None)
+    q.add_argument("--frames", type=int, default=None)
     from livefire.app.capture_cli import add_subparsers, run_command
 
     add_subparsers(sub)
@@ -58,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd in ("capture", "latency-timer"):
         return run_command(a)
+    if a.cmd == "quicklive":
+        from livefire.app.quicklive import run_quicklive
+
+        return run_quicklive(a.source, a.fov, a.depth, a.grid, Path(a.out), a.top_down, a.max_width, a.max_height,
+                             a.frames)
     if a.cmd == "live":
         from livefire.app.live import run_live
 

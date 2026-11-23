@@ -1,5 +1,6 @@
 seed: 1234
-device: "cpu"   # "cuda:0" on the GPU machine
+deterministic: false   # true: Warp RUN_TO_RUN (reproducible GPU atomics, slower launches); env LIVEFIRE_DETERMINISTIC=1
+device: "cuda:0"   # "cpu" for CPU-only machines
 dt_sim: 0.0166666667   # 1/60 s
 max_substeps_per_frame: 4
 headless: true

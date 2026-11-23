@@ -48,7 +48,7 @@ class LiveSession(InteractiveSession):
     """Live cameras + real acquisition. Same window/controller API as ``InteractiveSession``."""
 
     def __init__(self, cameras_path: str | None = None, calib_root: Path = DEFAULT_ROOT, depth: str | None = None,
-                 grid: int | None = None, max_w: int = 1600, max_h: int = 900, backends_factory: Any = None) -> None:  # noqa: D107
+                 grid: int | None = None, max_w: int = 1600, max_h: int = 900, backends_factory: Any = None) -> None:
         self.scene, self.grid_override = "live", ({"G": grid} if grid else {})
         self.app = load_yaml("app")
         self.fps = float(self.app.get("fps", 30))
@@ -100,6 +100,10 @@ class LiveSession(InteractiveSession):
         res = acquire_with_report(self.sources, self.cal, backends, grid_cfg={**load_yaml("grid"), **self.grid_override})
         del backends
         _release_models()
+        self._finish_build(res)
+
+    def _finish_build(self, res: Any) -> None:
+        """Log the acquisition report and build the simulation, compositor and controller from ``res.snapshot``."""
         for w in res.report["warnings"]:
             log.warning("acquisition: %s", w)
         for o, d in res.report["objects"].items():
@@ -149,7 +153,6 @@ def run_live(cameras: str | None, calib_root: str | None, depth: str | None, gri
     sess = LiveSession(cameras, Path(calib_root) if calib_root else DEFAULT_ROOT, depth, grid, max_w, max_h)
     log.info("ready after %.1f s: left click ignites, right click selects, 1-8 sets material, o overlay, r re-acquire, q quit",
              time.perf_counter() - t0)
-    sess.controller.start()
     try:
         return run_session(sess, "live", out, frames, False)
     finally:
